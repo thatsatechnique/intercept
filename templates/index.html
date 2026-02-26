@@ -286,6 +286,10 @@
                                 <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="2" y1="7" x2="22" y2="7"/><line x1="6" y1="11" x2="10" y2="11"/><line x1="6" y1="14" x2="14" y2="14"/></svg></span>
                                 <span class="mode-name">RF Fax</span>
                             </button>
+                            <button class="mode-card mode-card-sm" onclick="selectMode('ook')">
+                                <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3"/><path d="M19 12h3"/><rect x="5" y="8" width="4" height="8" rx="1"/><rect x="10" y="9" width="4" height="6" rx="1"/><rect x="15" y="7" width="4" height="10" rx="1"/></svg></span>
+                                <span class="mode-name">OOK Decoder</span>
+                            </button>
                         </div>
                     </div>
 
@@ -693,6 +697,8 @@
                 {% include 'partials/modes/morse.html' %}
 
                 {% include 'partials/modes/rf_fax.html' %}
+
+                {% include 'partials/modes/ook.html' %}
 
                 {% include 'partials/modes/space-weather.html' %}
 
@@ -3146,6 +3152,29 @@
                     </div>
                 </div>
 
+                <!-- OOK Decoder Output Panel -->
+                <div id="ookOutputPanel" style="display: none; margin-bottom: 12px;">
+                    <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px;">
+                            <span>Decoded Frames</span>
+                            <div style="display: flex; gap: 6px; align-items: center;">
+                                <span style="color: var(--text-dim); font-size: 10px;">Bit order:</span>
+                                <button class="btn btn-sm btn-ghost" id="ookBitMSB"
+                                        onclick="OokMode.setBitOrder('msb')"
+                                        style="background: var(--accent); color: #000;">MSB</button>
+                                <button class="btn btn-sm btn-ghost" id="ookBitLSB"
+                                        onclick="OokMode.setBitOrder('lsb')">LSB</button>
+                                <button class="btn btn-sm btn-ghost" onclick="OokMode.clearOutput()">Clear</button>
+                                <button class="btn btn-sm btn-ghost" onclick="OokMode.exportLog()">CSV</button>
+                            </div>
+                        </div>
+                        <div id="ookOutput" style="max-height: 400px; overflow-y: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);"></div>
+                    </div>
+                    <div style="margin-top: 4px; font-size: 10px; color: #555; text-align: right;">
+                        <span id="ookStatusBarFrames">0 frames</span>
+                    </div>
+                </div>
+
                 <div class="output-content signal-feed" id="output">
                     <div class="placeholder signal-empty-state">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -3217,6 +3246,7 @@
     <script src="{{ url_for('static', filename='js/modes/wefax.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/morse.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/rf-fax.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modes/ook.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/space-weather.js') }}"></script>
     <script src="{{ url_for('static', filename='js/core/voice-alerts.js') }}?v={{ version }}&r=voicefix2"></script>
     <script src="{{ url_for('static', filename='js/core/keyboard-shortcuts.js') }}"></script>
@@ -3372,6 +3402,7 @@
             waterfall: { label: 'Waterfall', indicator: 'WATERFALL', outputTitle: 'Spectrum Waterfall', group: 'signals' },
             morse: { label: 'Morse', indicator: 'MORSE', outputTitle: 'CW/Morse Decoder', group: 'signals' },
             rf_fax: { label: 'RF Fax', indicator: 'RF FAX', outputTitle: 'RF Fax / Bitmap Decoder', group: 'signals' },
+            ook: { label: 'OOK Decoder', indicator: 'OOK', outputTitle: 'OOK Signal Decoder', group: 'signals' },
         };
         const validModes = new Set(Object.keys(modeCatalog));
         window.interceptModeCatalog = Object.assign({}, modeCatalog);
@@ -4132,6 +4163,7 @@
             document.getElementById('waterfallMode')?.classList.toggle('active', mode === 'waterfall');
             document.getElementById('morseMode')?.classList.toggle('active', mode === 'morse');
             document.getElementById('rfFaxMode')?.classList.toggle('active', mode === 'rf_fax');
+            document.getElementById('ookMode')?.classList.toggle('active', mode === 'ook');
 
 
             const pagerStats = document.getElementById('pagerStats');
@@ -4219,6 +4251,8 @@
             const rfFaxLogPanel = document.getElementById('rfFaxLogPanel');
             if (rfFaxCanvasPanel && mode !== 'rf_fax') rfFaxCanvasPanel.style.display = 'none';
             if (rfFaxLogPanel && mode !== 'rf_fax') rfFaxLogPanel.style.display = 'none';
+            const ookOutputPanel = document.getElementById('ookOutputPanel');
+            if (ookOutputPanel && mode !== 'ook') ookOutputPanel.style.display = 'none';
 
             // Update output panel title based on mode
             const outputTitle = document.getElementById('outputTitle');
@@ -4273,20 +4307,24 @@
             // Show RTL-SDR device section for modes that use it
             const rtlDeviceSection = document.getElementById('rtlDeviceSection');
             if (rtlDeviceSection) {
-                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse' || mode === 'rf_fax') ? 'block' : 'none';
+                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse' || mode === 'rf_fax' || mode === 'ook') ? 'block' : 'none';
                 // Save original sidebar position of SDR device section (once)
                 if (!rtlDeviceSection._origParent) {
                     rtlDeviceSection._origParent = rtlDeviceSection.parentNode;
                     rtlDeviceSection._origNext = rtlDeviceSection.nextElementSibling;
                 }
-                // For morse and rf_fax modes, move SDR device section inside the mode panel after the title
+                // For morse, rf_fax, and ook modes, move SDR device section inside the mode panel after the title
                 const morsePanel = document.getElementById('morseMode');
                 const rfFaxPanel = document.getElementById('rfFaxMode');
+                const ookPanel = document.getElementById('ookMode');
                 if (mode === 'morse' && morsePanel) {
                     const firstSection = morsePanel.querySelector('.section');
                     if (firstSection) firstSection.after(rtlDeviceSection);
                 } else if (mode === 'rf_fax' && rfFaxPanel) {
                     const firstSection = rfFaxPanel.querySelector('.section');
+                    if (firstSection) firstSection.after(rtlDeviceSection);
+                } else if (mode === 'ook' && ookPanel) {
+                    const firstSection = ookPanel.querySelector('.section');
                     if (firstSection) firstSection.after(rtlDeviceSection);
                 } else if (rtlDeviceSection._origParent && rtlDeviceSection.parentNode !== rtlDeviceSection._origParent) {
                     // Restore to original sidebar position when leaving an injected mode
@@ -4391,6 +4429,8 @@
                 MorseMode.init();
             } else if (mode === 'rf_fax') {
                 RfFaxMode.init();
+            } else if (mode === 'ook') {
+                OokMode.init();
             }
 
             // Destroy Waterfall WebSocket when leaving SDR receiver modes

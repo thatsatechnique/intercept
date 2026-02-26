@@ -208,6 +208,11 @@ rf_fax_process = None
 rf_fax_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
 rf_fax_lock = threading.Lock()
 
+# Generic OOK signal decoder
+ook_process = None
+ook_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
+ook_lock = threading.Lock()
+
 # Deauth Attack Detection
 deauth_detector = None
 deauth_detector_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)

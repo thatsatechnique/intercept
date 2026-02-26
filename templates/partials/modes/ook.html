@@ -1,0 +1,132 @@
+<!-- OOK SIGNAL DECODER MODE -->
+<div id="ookMode" class="mode-content">
+    <div class="section">
+        <h3>OOK Signal Decoder</h3>
+        <p class="info-text" style="font-size: 11px; color: var(--text-dim); margin-bottom: 12px;">
+            Decode raw OOK (On-Off Keying) signals via rtl_433 flex decoder.
+            Captures frames with configurable pulse timing and displays raw bits,
+            hex, and attempted ASCII — useful for unknown ISM-band protocols.
+        </p>
+    </div>
+
+    <div class="section">
+        <h3>Frequency</h3>
+        <div class="form-group">
+            <label>Frequency (MHz)</label>
+            <input type="number" id="ookFrequency" value="433.920" step="0.001" min="1" max="1766">
+        </div>
+        <div class="form-group">
+            <label>Presets</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                <button class="preset-btn" onclick="OokMode.setFreq(433.200)">433.2</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(433.500)">433.5</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(433.600)">433.6</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(433.700)">433.7</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(433.800)">433.8</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(433.920)">433.9</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(315.000)">315</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(868.000)">868</button>
+                <button class="preset-btn" onclick="OokMode.setFreq(915.000)">915</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>SDR Settings</h3>
+        <div class="form-group">
+            <label>Gain (dB)</label>
+            <input type="number" id="ookGain" value="40" step="1" min="0" max="50">
+        </div>
+        <div class="form-group">
+            <label>PPM Correction</label>
+            <input type="number" id="ookPPM" value="0" step="1" min="-100" max="100">
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>Modulation</h3>
+        <div class="form-group">
+            <div style="display: flex; gap: 4px;">
+                <button class="preset-btn" id="ookEnc_pwm"
+                        onclick="OokMode.setEncoding('pwm')"
+                        style="flex: 1; background: var(--accent); color: #000;">PWM</button>
+                <button class="preset-btn" id="ookEnc_ppm"
+                        onclick="OokMode.setEncoding('ppm')"
+                        style="flex: 1;">PPM</button>
+                <button class="preset-btn" id="ookEnc_manchester"
+                        onclick="OokMode.setEncoding('manchester')"
+                        style="flex: 1;">Manchester</button>
+            </div>
+            <input type="hidden" id="ookEncoding" value="pwm">
+            <p id="ookEncodingHint" class="info-text" style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">
+                Short pulse = 0, long pulse = 1. Most common for ISM OOK.
+            </p>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>Pulse Timing</h3>
+        <p class="info-text" style="font-size: 10px; color: var(--text-dim); margin-bottom: 8px;">
+            Pulse widths in microseconds for the flex decoder.
+        </p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div class="form-group">
+                <label>Short (&mu;s)</label>
+                <input type="number" id="ookShortPulse" value="300" step="10" min="50" max="5000">
+            </div>
+            <div class="form-group">
+                <label>Long (&mu;s)</label>
+                <input type="number" id="ookLongPulse" value="600" step="10" min="100" max="10000">
+            </div>
+            <div class="form-group">
+                <label>Gap/Reset (&mu;s)</label>
+                <input type="number" id="ookResetLimit" value="8000" step="100" min="500" max="50000">
+            </div>
+            <div class="form-group">
+                <label>Gap limit (&mu;s)</label>
+                <input type="number" id="ookGapLimit" value="5000" step="100" min="500" max="50000">
+            </div>
+            <div class="form-group">
+                <label>Tolerance (&mu;s)</label>
+                <input type="number" id="ookTolerance" value="150" step="10" min="10" max="1000">
+            </div>
+            <div class="form-group">
+                <label>Min bits</label>
+                <input type="number" id="ookMinBits" value="8" step="1" min="1" max="512">
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>Options</h3>
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="ookDeduplicate" style="width: auto; margin: 0;">
+                <span>Deduplicate frames</span>
+            </label>
+            <p class="info-text" style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">
+                Suppress consecutive frames with identical hex content.
+                Useful when a transmitter repeats the same packet multiple times.
+            </p>
+        </div>
+    </div>
+
+    <!-- Status -->
+    <div class="section">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim);">
+            <span id="ookStatusIndicator" class="status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim);"></span>
+            <span id="ookStatusText">Standby</span>
+            <span style="margin-left: auto;" id="ookFrameCount">0 frames</span>
+        </div>
+    </div>
+
+    <div class="section">
+        <p class="info-text" style="font-size: 11px; color: #ffaa00; line-height: 1.5;">
+            Uses rtl_433 with a custom flex decoder. Requires rtl_433 installed.
+            Works on any OOK/ASK signal in the SDR's frequency range.
+        </p>
+    </div>
+
+    <button class="run-btn" id="ookStartBtn" onclick="OokMode.start()">Start Decoder</button>
+    <button class="stop-btn" id="ookStopBtn" onclick="OokMode.stop()" style="display: none;">Stop Decoder</button>
+</div>
