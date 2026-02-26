@@ -264,6 +264,14 @@ def rf_fax_parser_thread(
 
                 frame = parse_fax_frame(hex_str)
                 if frame is None:
+                    # rtl_433 OOK_PWM maps short→'1', but some transmitters
+                    # use long→'1' (inverted ratio). Try bit-flipping the hex.
+                    try:
+                        inv = bytes(b ^ 0xFF for b in bytes.fromhex(hex_str.replace(' ', '')))
+                        frame = parse_fax_frame(inv.hex())
+                    except ValueError:
+                        pass
+                if frame is None:
                     continue
 
                 timestamp = datetime.now().strftime('%H:%M:%S')
