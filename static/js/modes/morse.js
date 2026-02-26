@@ -63,7 +63,9 @@ var MorseMode = (function () {
     function start() {
         if (state.running) return;
 
-        var rtlTcpHost = (document.getElementById('morseRtlTcpHost')?.value || '').trim();
+        var remoteSDR = typeof getRemoteSDRConfig === 'function' ? getRemoteSDRConfig() : null;
+        if (remoteSDR === false) return; // validation failed, alert already shown
+
         var payload = {
             frequency: document.getElementById('morseFrequency').value || '14.060',
             gain: document.getElementById('morseGain').value || '0',
@@ -75,9 +77,9 @@ var MorseMode = (function () {
             wpm: document.getElementById('morseWpm').value || '15',
             bias_t: typeof getBiasTEnabled === 'function' ? getBiasTEnabled() : false,
         };
-        if (rtlTcpHost) {
-            payload.rtl_tcp_host = rtlTcpHost;
-            payload.rtl_tcp_port = parseInt(document.getElementById('morseRtlTcpPort')?.value || '1234', 10);
+        if (remoteSDR) {
+            payload.rtl_tcp_host = remoteSDR.host;
+            payload.rtl_tcp_port = remoteSDR.port;
         }
 
         fetch('/morse/start', {

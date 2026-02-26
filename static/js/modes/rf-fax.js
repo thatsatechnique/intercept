@@ -61,7 +61,9 @@ var RfFaxMode = (function () {
     function start() {
         if (state.running) return;
 
-        var rtlTcpHost = (document.getElementById('rfFaxRtlTcpHost')?.value || '').trim();
+        var remoteSDR = typeof getRemoteSDRConfig === 'function' ? getRemoteSDRConfig() : null;
+        if (remoteSDR === false) return; // validation failed, alert already shown
+
         var payload = {
             frequency: document.getElementById('rfFaxFrequency').value || '433.400',
             gain: document.getElementById('rfFaxGain').value || '0',
@@ -70,15 +72,12 @@ var RfFaxMode = (function () {
             sdr_type: document.getElementById('sdrTypeSelect')?.value || 'rtlsdr',
             short_pulse: document.getElementById('rfFaxShortPulse').value || '300',
             long_pulse: document.getElementById('rfFaxLongPulse').value || '600',
-            expected_lines: document.getElementById('rfFaxExpectedLines').value || '11',
             bias_t: typeof getBiasTEnabled === 'function' ? getBiasTEnabled() : false,
         };
-        if (rtlTcpHost) {
-            payload.rtl_tcp_host = rtlTcpHost;
-            payload.rtl_tcp_port = parseInt(document.getElementById('rfFaxRtlTcpPort')?.value || '1234', 10);
+        if (remoteSDR) {
+            payload.rtl_tcp_host = remoteSDR.host;
+            payload.rtl_tcp_port = remoteSDR.port;
         }
-
-        state.expectedLines = parseInt(payload.expected_lines, 10) || 11;
 
         fetch('/rf_fax/start', {
             method: 'POST',
