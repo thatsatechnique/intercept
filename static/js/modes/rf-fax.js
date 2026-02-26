@@ -72,6 +72,7 @@ var RfFaxMode = (function () {
             sdr_type: document.getElementById('sdrTypeSelect')?.value || 'rtlsdr',
             short_pulse: document.getElementById('rfFaxShortPulse').value || '300',
             long_pulse: document.getElementById('rfFaxLongPulse').value || '600',
+            waterfall: document.getElementById('rfFaxWaterfall')?.checked || false,
             bias_t: typeof getBiasTEnabled === 'function' ? getBiasTEnabled() : false,
         };
         if (remoteSDR) {

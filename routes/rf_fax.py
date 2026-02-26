@@ -68,6 +68,7 @@ def start_rf_fax() -> Response:
         tolerance = int(data.get('tolerance', 150))
         min_bits = int(data.get('min_bits', 64))
         expected_lines = int(data.get('expected_lines', 11))
+        waterfall = bool(data.get('waterfall', False))
 
         # Claim local device only if not using remote rtl_tcp
         if not rtl_tcp_host:
@@ -175,6 +176,7 @@ def start_rf_fax() -> Response:
                     app_module.rf_fax_queue,
                     stop_event,
                     expected_lines,
+                    waterfall,
                 ),
             )
             parser_thread.daemon = True

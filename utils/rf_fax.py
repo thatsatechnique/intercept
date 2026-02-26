@@ -186,11 +186,22 @@ def rf_fax_parser_thread(
     output_queue: queue.Queue,
     stop_event: threading.Event,
     expected_lines: int = 11,
+    waterfall: bool = False,
 ) -> None:
     """Thread function: reads rtl_433 JSON output, parses fax frames.
 
     Reads JSON lines from rtl_433 stdout, extracts hex data from the
     'codes' field, parses fax frames, and pushes events to output_queue.
+
+    Args:
+        rtl_stdout: rtl_433 stdout pipe.
+        output_queue: Queue for SSE events.
+        stop_event: Threading event to signal shutdown.
+        expected_lines: Expected lines per frame (frame mode only).
+        waterfall: If True, ignore frame line_num and assign sequential
+            row indices instead. Every received frame appends a new row,
+            producing an endless scroll. If False (default), frame
+            line_num is the row index and retransmissions overwrite.
 
     Events emitted:
       type='rf_fax_line'  — decoded scan line with pixel data
@@ -200,6 +211,7 @@ def rf_fax_parser_thread(
       type='error'        — error messages
     """
     assembler = FaxBitmapAssembler(expected_lines=expected_lines)
+    _waterfall_counter = 0  # monotonically increasing row index for waterfall mode
 
     try:
         for line in iter(rtl_stdout.readline, b''):
@@ -277,16 +289,22 @@ def rf_fax_parser_thread(
 
                 timestamp = datetime.now().strftime('%H:%M:%S')
 
+                # In waterfall mode substitute a monotonic counter so every
+                # received frame gets a unique row slot (no overwrites).
+                if waterfall:
+                    row_index = _waterfall_counter
+                    _waterfall_counter += 1
+                else:
+                    row_index = frame['line_num']
+
                 # Add line to assembler
-                status = assembler.add_line(
-                    frame['line_num'], frame['pixels']
-                )
+                status = assembler.add_line(row_index, frame['pixels'])
 
                 # Emit line event
                 try:
                     output_queue.put_nowait({
                         'type': 'rf_fax_line',
-                        'line_num': frame['line_num'],
+                        'line_num': row_index,
                         'width_pixels': frame['width_pixels'],
                         'pixels': frame['pixels'],
                         'pixel_hex': frame['pixel_hex'],

@@ -53,6 +53,16 @@
                 <input type="number" id="rfFaxLongPulse" value="600" step="10" min="100" max="4000">
             </div>
         </div>
+        <div class="form-group" style="margin-top: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="rfFaxWaterfall" style="width: auto; margin: 0;">
+                <span>Waterfall mode</span>
+            </label>
+            <p class="info-text" style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">
+                Ignore frame line numbers &mdash; append every received frame as a new row.
+                Use for unknown protocols or signals without stable row indices.
+            </p>
+        </div>
     </div>
 
     <!-- Status -->
