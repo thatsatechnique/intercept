@@ -4273,25 +4273,36 @@
             // Show RTL-SDR device section for modes that use it
             const rtlDeviceSection = document.getElementById('rtlDeviceSection');
             if (rtlDeviceSection) {
-                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse') ? 'block' : 'none';
+                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse' || mode === 'rf_fax') ? 'block' : 'none';
                 // Save original sidebar position of SDR device section (once)
                 if (!rtlDeviceSection._origParent) {
                     rtlDeviceSection._origParent = rtlDeviceSection.parentNode;
                     rtlDeviceSection._origNext = rtlDeviceSection.nextElementSibling;
                 }
-                // For morse mode, move SDR device section inside the morse panel after the title
+                // For morse and rf_fax modes, move SDR device section inside the mode panel after the title
                 const morsePanel = document.getElementById('morseMode');
+                const rfFaxPanel = document.getElementById('rfFaxMode');
                 if (mode === 'morse' && morsePanel) {
                     const firstSection = morsePanel.querySelector('.section');
                     if (firstSection) firstSection.after(rtlDeviceSection);
+                } else if (mode === 'rf_fax' && rfFaxPanel) {
+                    const firstSection = rfFaxPanel.querySelector('.section');
+                    if (firstSection) firstSection.after(rtlDeviceSection);
                 } else if (rtlDeviceSection._origParent && rtlDeviceSection.parentNode !== rtlDeviceSection._origParent) {
-                    // Restore to original sidebar position when leaving morse mode
+                    // Restore to original sidebar position when leaving an injected mode
                     if (rtlDeviceSection._origNext) {
                         rtlDeviceSection._origNext.before(rtlDeviceSection);
                     } else {
                         rtlDeviceSection._origParent.appendChild(rtlDeviceSection);
                     }
                 }
+            }
+
+            // Hide shared filter bar when switching to modes that don't use it
+            const filterBarModes = new Set(['pager', 'sensor', 'rtlamr']);
+            if (!filterBarModes.has(mode)) {
+                const fbc = document.getElementById('filterBarContainer');
+                if (fbc) fbc.style.display = 'none';
             }
 
             // Toggle mode-specific tool status displays
