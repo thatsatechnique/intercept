@@ -126,6 +126,17 @@ def ook_parser_thread(
                 if raw_data:
                     codes = [str(raw_data)]
 
+            # Extract signal level if rtl_433 was invoked with -M level
+            rssi: float | None = None
+            for _rssi_key in ('snr', 'rssi', 'level', 'noise'):
+                _rssi_val = data.get(_rssi_key)
+                if _rssi_val is not None:
+                    try:
+                        rssi = round(float(_rssi_val), 1)
+                    except (TypeError, ValueError):
+                        pass
+                    break
+
             if not codes:
                 logger.debug(
                     f'[rtl_433/ook] no code field — keys: {list(data.keys())}'
@@ -176,7 +187,7 @@ def ook_parser_thread(
                     continue
 
                 try:
-                    output_queue.put_nowait({
+                    event: dict[str, Any] = {
                         'type': 'ook_frame',
                         'hex': frame['hex'],
                         'bits': frame['bits'],
@@ -185,7 +196,10 @@ def ook_parser_thread(
                         'inverted': inverted,
                         'encoding': encoding,
                         'timestamp': timestamp,
-                    })
+                    }
+                    if rssi is not None:
+                        event['rssi'] = rssi
+                    output_queue.put_nowait(event)
                 except queue.Full:
                     pass
 

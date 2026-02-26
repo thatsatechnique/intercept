@@ -152,7 +152,7 @@ def start_ook() -> Response:
                 continue
             filtered_cmd.append(arg)
 
-        filtered_cmd.extend(['-R', '0', '-X', flex_spec])
+        filtered_cmd.extend(['-M', 'level', '-R', '0', '-X', flex_spec])
 
         full_cmd = ' '.join(filtered_cmd)
         logger.info(f'OOK decoder running: {full_cmd}')

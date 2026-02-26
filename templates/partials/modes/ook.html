@@ -95,6 +95,21 @@
                 <input type="number" id="ookMinBits" value="8" step="1" min="1" max="512">
             </div>
         </div>
+        <div class="form-group" style="margin-top: 8px;">
+            <label style="font-size: 10px; color: var(--text-dim);">Quick presets (short/long &mu;s)</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">
+                <button class="preset-btn" onclick="OokMode.setTiming(300,600,8000,5000,150,8)"
+                        title="Generic ISM default">300/600</button>
+                <button class="preset-btn" onclick="OokMode.setTiming(300,900,8000,5000,150,16)"
+                        title="PWM common variant">300/900</button>
+                <button class="preset-btn" onclick="OokMode.setTiming(400,800,8000,5000,150,16)"
+                        title="Generic 2:1 ratio">400/800</button>
+                <button class="preset-btn" onclick="OokMode.setTiming(500,1500,10000,6000,200,16)"
+                        title="Long-range keyfob">500/1500</button>
+                <button class="preset-btn" onclick="OokMode.setTiming(500,1000,8000,5000,150,8)"
+                        title="Manchester clock period">500 MC</button>
+            </div>
+        </div>
     </div>
 
     <div class="section">

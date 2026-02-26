@@ -16,6 +16,7 @@ var OokMode = (function () {
         frames: [],          // raw frame objects from SSE
         frameCount: 0,
         bitOrder: 'msb',     // 'msb' | 'lsb'
+        filterQuery: '',     // active hex/ascii filter
     };
 
     // ---- Initialization ----
@@ -209,7 +210,7 @@ var OokMode = (function () {
 
         var div = document.createElement('div');
         div.className = 'ook-frame';
-        div.dataset.bits = msg.bits;
+        div.dataset.bits = msg.bits || '';
         div.dataset.bitCount = msg.bit_count;
         div.dataset.inverted = msg.inverted ? '1' : '0';
 
@@ -217,10 +218,14 @@ var OokMode = (function () {
         var suffix = '';
         if (msg.inverted) suffix += ' <span style="opacity:.5">(inv)</span>';
 
+        var rssiStr = (msg.rssi !== undefined && msg.rssi !== null)
+            ? '  <span style="color:#666; font-size:10px">' + msg.rssi.toFixed(1) + ' dB SNR</span>'
+            : '';
+
         div.innerHTML =
             '<span style="color:var(--text-dim)">' + msg.timestamp + '</span>' +
             '  <span style="color:#888">[' + msg.bit_count + 'b]</span>' +
-            suffix +
+            rssiStr + suffix +
             '<br>' +
             '<span style="padding-left:8em; color:' + color + '; font-family:var(--font-mono); font-size:10px">' +
             'hex: ' + interp.hex +
@@ -231,6 +236,16 @@ var OokMode = (function () {
             '</span>';
 
         div.style.cssText = 'font-size:11px; padding: 4px 0; border-bottom: 1px solid #1a1a1a; line-height:1.6;';
+
+        // Apply current filter
+        if (state.filterQuery) {
+            var q = state.filterQuery;
+            if (!interp.hex.includes(q) && !interp.ascii.toLowerCase().includes(q)) {
+                div.style.display = 'none';
+            } else {
+                div.style.background = 'rgba(0,255,136,0.05)';
+            }
+        }
 
         panel.appendChild(div);
         panel.scrollTop = panel.scrollHeight;
@@ -272,12 +287,13 @@ var OokMode = (function () {
     }
 
     function exportLog() {
-        var lines = ['timestamp,bit_count,hex_msb,ascii_msb,inverted'];
+        var lines = ['timestamp,bit_count,rssi_db,hex_msb,ascii_msb,inverted'];
         state.frames.forEach(function (msg) {
             var interp = interpretBits(msg.bits, 'msb');
             lines.push([
                 msg.timestamp,
                 msg.bit_count,
+                msg.rssi !== undefined && msg.rssi !== null ? msg.rssi : '',
                 interp.hex,
                 '"' + interp.ascii.replace(/"/g, '""') + '"',
                 msg.inverted,
@@ -325,6 +341,80 @@ var OokMode = (function () {
         if (el) el.value = mhz;
     }
 
+    /**
+     * Apply a timing preset — fills all six pulse timing fields at once.
+     * @param {number} s  Short pulse (µs)
+     * @param {number} l  Long pulse (µs)
+     * @param {number} r  Reset/gap limit (µs)
+     * @param {number} g  Gap limit (µs)
+     * @param {number} t  Tolerance (µs)
+     * @param {number} b  Min bits
+     */
+    function setTiming(s, l, r, g, t, b) {
+        var fields = {
+            ookShortPulse: s,
+            ookLongPulse: l,
+            ookResetLimit: r,
+            ookGapLimit: g,
+            ookTolerance: t,
+            ookMinBits: b,
+        };
+        Object.keys(fields).forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.value = fields[id];
+        });
+    }
+
+    // ---- Auto bit-order suggestion ----
+
+    /**
+     * Count printable chars for MSB and LSB across all stored frames,
+     * then switch to whichever produces more readable output.
+     */
+    function suggestBitOrder() {
+        if (state.frames.length === 0) return;
+        var msbCount = 0, lsbCount = 0;
+        state.frames.forEach(function (msg) {
+            msbCount += interpretBits(msg.bits, 'msb').printable.length;
+            lsbCount += interpretBits(msg.bits, 'lsb').printable.length;
+        });
+        var best = msbCount >= lsbCount ? 'msb' : 'lsb';
+        setBitOrder(best);
+        var label = document.getElementById('ookSuggestLabel');
+        if (label) {
+            var winner = best === 'msb' ? msbCount : lsbCount;
+            label.textContent = best.toUpperCase() + ' (' + winner + ' printable)';
+            label.style.color = '#00ff88';
+        }
+    }
+
+    // ---- Pattern search / filter ----
+
+    /**
+     * Show only frames whose hex or ASCII interpretation contains the query.
+     * Clears filter when query is empty.
+     * @param {string} query
+     */
+    function filterFrames(query) {
+        state.filterQuery = query.toLowerCase().trim();
+        var q = state.filterQuery;
+        var panel = document.getElementById('ookOutput');
+        if (!panel) return;
+        var divs = panel.querySelectorAll('.ook-frame');
+        divs.forEach(function (div) {
+            if (!q) {
+                div.style.display = '';
+                div.style.background = '';
+                return;
+            }
+            var bits = div.dataset.bits || '';
+            var interp = interpretBits(bits, state.bitOrder);
+            var match = interp.hex.includes(q) || interp.ascii.toLowerCase().includes(q);
+            div.style.display = match ? '' : 'none';
+            div.style.background = match ? 'rgba(0,255,136,0.05)' : '';
+        });
+    }
+
     // ---- UI ----
 
     function updateUI(running) {
@@ -351,7 +441,10 @@ var OokMode = (function () {
         stop: stop,
         setFreq: setFreq,
         setEncoding: setEncoding,
+        setTiming: setTiming,
         setBitOrder: setBitOrder,
+        suggestBitOrder: suggestBitOrder,
+        filterFrames: filterFrames,
         clearOutput: clearOutput,
         exportLog: exportLog,
     };
