@@ -320,6 +320,38 @@ var RfFaxMode = (function () {
         link.click();
     }
 
+    function tearPage() {
+        // Save the current canvas as a timestamped PNG, then clear for the next page
+        var canvas = document.getElementById('rfFaxCanvas');
+        var ts = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+        if (canvas && state.bitmap && state.bitmap.length > 0) {
+            var link = document.createElement('a');
+            link.download = 'rf_fax_' + ts + '.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        // Add tear separator to log
+        var logPanel = document.getElementById('rfFaxLog');
+        if (logPanel) {
+            var sep = document.createElement('div');
+            sep.style.cssText = 'color: #555; font-size: 10px; padding: 4px 0; letter-spacing: 2px; border-top: 1px dashed #333; border-bottom: 1px dashed #333; margin: 4px 0; text-align: center;';
+            sep.textContent = '─── page torn ' + new Date().toTimeString().slice(0, 8) + ' ───';
+            logPanel.appendChild(sep);
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
+
+        // Clear bitmap state for the next page
+        state.bitmap = null;
+        state.widthPixels = 0;
+        state.linesReceived = 0;
+        clearCanvas();
+        var countEl = document.getElementById('rfFaxLineCount');
+        if (countEl) countEl.textContent = '0 lines';
+        var barLines = document.getElementById('rfFaxStatusBarLines');
+        if (barLines) barLines.textContent = '0 lines';
+    }
+
     function exportLog() {
         var lines = ['timestamp,line_num,pixel_hex,is_new'];
         state.lineLog.forEach(function (e) {
@@ -379,5 +411,6 @@ var RfFaxMode = (function () {
         exportPng: exportPng,
         exportLog: exportLog,
         clearLog: clearLog,
+        tearPage: tearPage,
     };
 })();
