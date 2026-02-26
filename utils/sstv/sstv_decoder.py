@@ -552,14 +552,19 @@ class SSTVDecoder:
         # Clean up if the thread exits while we thought we were running.
         # This prevents a "ghost running" state where is_running is True
         # but the thread has already died (e.g. rtl_fm exited).
+        orphan_proc = None
         with self._lock:
             was_running = self._running
             self._running = False
             if was_running and self._rtl_process:
-                with contextlib.suppress(Exception):
-                    self._rtl_process.terminate()
-                    self._rtl_process.wait(timeout=2)
+                orphan_proc = self._rtl_process
                 self._rtl_process = None
+
+        # Terminate outside lock to avoid blocking other operations
+        if orphan_proc:
+            with contextlib.suppress(Exception):
+                orphan_proc.terminate()
+                orphan_proc.wait(timeout=2)
 
         if was_running:
             logger.warning("Audio decode thread stopped unexpectedly")
@@ -661,38 +666,52 @@ class SSTVDecoder:
 
     def _retune_rtl_fm(self, new_freq_hz: int) -> None:
         """Retune rtl_fm to a new frequency by restarting the process."""
+        old_proc = None
         with self._lock:
             if not self._running:
                 return
+            old_proc = self._rtl_process
+            self._rtl_process = None
 
-            if self._rtl_process:
-                try:
-                    self._rtl_process.terminate()
-                    self._rtl_process.wait(timeout=2)
-                except Exception:
-                    with contextlib.suppress(Exception):
-                        self._rtl_process.kill()
+        # Terminate old process outside lock
+        if old_proc:
+            try:
+                old_proc.terminate()
+                old_proc.wait(timeout=2)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    old_proc.kill()
 
-            rtl_cmd = [
-                'rtl_fm',
-                '-d', str(self._device_index),
-                '-f', str(new_freq_hz),
-                '-M', self._modulation,
-                '-s', str(SAMPLE_RATE),
-                '-r', str(SAMPLE_RATE),
-                '-l', '0',
-                '-'
-            ]
+        # Build and start new process outside lock
+        rtl_cmd = [
+            'rtl_fm',
+            '-d', str(self._device_index),
+            '-f', str(new_freq_hz),
+            '-M', self._modulation,
+            '-s', str(SAMPLE_RATE),
+            '-r', str(SAMPLE_RATE),
+            '-l', '0',
+            '-'
+        ]
 
-            logger.debug(f"Restarting rtl_fm: {' '.join(rtl_cmd)}")
+        logger.debug(f"Restarting rtl_fm: {' '.join(rtl_cmd)}")
 
-            self._rtl_process = subprocess.Popen(
-                rtl_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+        new_proc = subprocess.Popen(
+            rtl_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
 
-            self._current_tuned_freq_hz = new_freq_hz
+        # Re-acquire lock to install new process
+        with self._lock:
+            if self._running:
+                self._rtl_process = new_proc
+                self._current_tuned_freq_hz = new_freq_hz
+            else:
+                # stop() was called during retune — clean up new process
+                with contextlib.suppress(Exception):
+                    new_proc.terminate()
+                    new_proc.wait(timeout=2)
 
     @property
     def last_doppler_info(self) -> DopplerInfo | None:
@@ -706,19 +725,22 @@ class SSTVDecoder:
 
     def stop(self) -> None:
         """Stop SSTV decoder."""
+        proc_to_terminate = None
         with self._lock:
             self._running = False
+            proc_to_terminate = self._rtl_process
+            self._rtl_process = None
 
-            if self._rtl_process:
-                try:
-                    self._rtl_process.terminate()
-                    self._rtl_process.wait(timeout=5)
-                except Exception:
-                    with contextlib.suppress(Exception):
-                        self._rtl_process.kill()
-                self._rtl_process = None
+        # Terminate outside lock to avoid blocking other operations
+        if proc_to_terminate:
+            try:
+                proc_to_terminate.terminate()
+                proc_to_terminate.wait(timeout=5)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    proc_to_terminate.kill()
 
-            logger.info("SSTV decoder stopped")
+        logger.info("SSTV decoder stopped")
 
     def get_images(self) -> list[SSTVImage]:
         """Get list of decoded images."""

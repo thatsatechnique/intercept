@@ -5,9 +5,9 @@ DSC (Digital Selective Calling) decoder.
 Decodes VHF DSC signals per ITU-R M.493. Reads 48kHz 16-bit signed
 audio from stdin (from rtl_fm) and outputs JSON messages to stdout.
 
-DSC uses 100 baud FSK with:
-- Mark (1): 1800 Hz
-- Space (0): 1200 Hz
+DSC uses 1200 bps FSK on a 1700 Hz subcarrier with:
+- Mark (1): 2100 Hz
+- Space (0): 1300 Hz
 
 Frame structure:
 1. Dot pattern: 200 bits alternating 1/0 for synchronization
@@ -42,6 +42,7 @@ from .constants import (
     DSC_AUDIO_SAMPLE_RATE,
     FORMAT_CODES,
     DISTRESS_NATURE_CODES,
+    VALID_EOS,
 )
 
 # Configure logging
@@ -57,7 +58,7 @@ class DSCDecoder:
     """
     DSC FSK decoder.
 
-    Demodulates 100 baud FSK audio and decodes DSC protocol.
+    Demodulates 1200 bps FSK audio and decodes DSC protocol.
     """
 
     def __init__(self, sample_rate: int = DSC_AUDIO_SAMPLE_RATE):
@@ -66,13 +67,13 @@ class DSCDecoder:
         self.samples_per_bit = sample_rate // self.baud_rate
 
         # FSK frequencies
-        self.mark_freq = DSC_MARK_FREQ  # 1800 Hz = binary 1
-        self.space_freq = DSC_SPACE_FREQ  # 1200 Hz = binary 0
+        self.mark_freq = DSC_MARK_FREQ  # 2100 Hz = binary 1
+        self.space_freq = DSC_SPACE_FREQ  # 1300 Hz = binary 0
 
-        # Bandpass filter for DSC band (1100-1900 Hz)
+        # Bandpass filter for DSC band (1100-2300 Hz)
         nyq = sample_rate / 2
         low = 1100 / nyq
-        high = 1900 / nyq
+        high = 2300 / nyq
         self.bp_b, self.bp_a = scipy_signal.butter(4, [low, high], btype='band')
 
         # Build FSK correlators
@@ -278,11 +279,11 @@ class DSCDecoder:
         if len(symbols) < 5:
             return None
 
-        # Look for EOS (End of Sequence) - symbol 127
+        # Look for EOS (End of Sequence) - symbols 117, 122, or 127
         eos_found = False
         eos_index = -1
         for i, sym in enumerate(symbols):
-            if sym == 127:  # EOS symbol
+            if sym in VALID_EOS:
                 eos_found = True
                 eos_index = i
                 break
@@ -337,20 +338,21 @@ class DSCDecoder:
             format_code = symbols[0]
             format_text = FORMAT_CODES.get(format_code, f'UNKNOWN-{format_code}')
 
-            # Determine category from format
-            category = 'ROUTINE'
-            if format_code == 100:
+            # Derive category from format specifier per ITU-R M.493
+            if format_code == 120:
                 category = 'DISTRESS'
-            elif format_code == 106:
-                category = 'DISTRESS_ACK'
-            elif format_code == 108:
-                category = 'DISTRESS_RELAY'
-            elif format_code == 118:
-                category = 'SAFETY'
-            elif format_code == 120:
-                category = 'URGENCY'
+            elif format_code == 123:
+                category = 'ALL_SHIPS_URGENCY_SAFETY'
             elif format_code == 102:
                 category = 'ALL_SHIPS'
+            elif format_code == 116:
+                category = 'GROUP'
+            elif format_code == 112:
+                category = 'INDIVIDUAL'
+            elif format_code == 114:
+                category = 'INDIVIDUAL_ACK'
+            else:
+                category = FORMAT_CODES.get(format_code, 'UNKNOWN')
 
             # Decode MMSI from symbols 1-5 (destination/address)
             dest_mmsi = self._decode_mmsi(symbols[1:6])

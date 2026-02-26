@@ -186,7 +186,7 @@ def start_capture():
 
     decoder.set_on_complete(_release_device)
 
-    success = decoder.start(
+    success, error_msg = decoder.start(
         satellite=satellite,
         device_index=device_index,
         gain=gain,
@@ -208,7 +208,7 @@ def start_capture():
         _release_device()
         return jsonify({
             'status': 'error',
-            'message': 'Failed to start capture'
+            'message': error_msg or 'Failed to start capture'
         }), 500
 
 
@@ -310,7 +310,7 @@ def test_decode():
     decoder.set_callback(_progress_callback)
     decoder.set_on_complete(None)
 
-    success = decoder.start_from_file(
+    success, error_msg = decoder.start_from_file(
         satellite=satellite,
         input_file=input_file,
         sample_rate=sample_rate,
@@ -329,7 +329,7 @@ def test_decode():
     else:
         return jsonify({
             'status': 'error',
-            'message': 'Failed to start file decode'
+            'message': error_msg or 'Failed to start file decode'
         }), 500
 
 

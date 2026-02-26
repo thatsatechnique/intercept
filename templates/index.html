@@ -80,7 +80,8 @@
             subghz: "{{ url_for('static', filename='css/modes/subghz.css') }}?v={{ version }}&r=subghz_layout9",
             bt_locate: "{{ url_for('static', filename='css/modes/bt_locate.css') }}?v={{ version }}&r=btlocate4",
             spaceweather: "{{ url_for('static', filename='css/modes/space-weather.css') }}",
-            wefax: "{{ url_for('static', filename='css/modes/wefax.css') }}"
+            wefax: "{{ url_for('static', filename='css/modes/wefax.css') }}",
+            morse: "{{ url_for('static', filename='css/modes/morse.css') }}"
         };
         window.INTERCEPT_MODE_STYLE_LOADED = {};
         window.INTERCEPT_MODE_STYLE_PROMISES = {};
@@ -194,6 +195,12 @@
             </svg>
         </div>
         <div class="welcome-container">
+            <button type="button" class="welcome-settings-btn" onclick="showSettings()" title="Settings" aria-label="Open settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+            </button>
             <!-- Header Section -->
             <div class="welcome-header">
                 <div class="welcome-logo">
@@ -270,6 +277,10 @@
                             <button class="mode-card mode-card-sm" onclick="selectMode('waterfall')">
                                 <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-8 3 16 3-8h4"/><path d="M2 18h20" opacity="0.5"/><path d="M2 21h20" opacity="0.3"/></svg></span>
                                 <span class="mode-name">Waterfall</span>
+                            </button>
+                            <button class="mode-card mode-card-sm" onclick="selectMode('morse')">
+                                <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="12" x2="5" y2="12"/><line x1="7" y1="12" x2="13" y2="12"/><line x1="15" y1="12" x2="18" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg></span>
+                                <span class="mode-name">Morse</span>
                             </button>
                         </div>
                     </div>
@@ -674,6 +685,8 @@
                 {% include 'partials/modes/gps.html' %}
 
                 {% include 'partials/modes/wefax.html' %}
+
+                {% include 'partials/modes/morse.html' %}
 
                 {% include 'partials/modes/space-weather.html' %}
 
@@ -3001,6 +3014,7 @@
                     </div>
                 </div>
 
+
                 <!-- Device Intelligence Dashboard (above waterfall for prominence) -->
                 <div class="recon-panel collapsed" id="reconPanel">
                     <div class="recon-header" onclick="toggleReconCollapse()" style="cursor: pointer;">
@@ -3055,6 +3069,42 @@
                 </div>
 
                 <div id="sensorTimelineContainer" style="display: none; margin-bottom: 12px;"></div>
+
+                <!-- Morse Signal Scope -->
+                <div id="morseScopePanel" style="display: none; margin-bottom: 12px;">
+                    <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px; font-family: 'Roboto Condensed', 'Arial Narrow', sans-serif;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px;">
+                            <span>CW Tone Detection</span>
+                            <div style="display: flex; gap: 14px;">
+                                <span>TONE: <span id="morseScopeToneLabel" style="color: #0f0; font-variant-numeric: tabular-nums;">--</span></span>
+                                <span>THRESH: <span id="morseScopeThreshLabel" style="color: #fa0; font-variant-numeric: tabular-nums;">--</span></span>
+                                <span id="morseScopeStatusLabel" style="color: #444;">IDLE</span>
+                            </div>
+                        </div>
+                        <canvas id="morseScopeCanvas" style="width: 100%; height: 80px; display: block; border-radius: 3px; background: #050510;"></canvas>
+                    </div>
+                </div>
+
+                <!-- Morse Decoded Output -->
+                <div id="morseOutputPanel" style="display: none; margin-bottom: 12px;">
+                    <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px;">
+                            <span>Decoded Text</span>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="btn btn-sm btn-ghost" onclick="MorseMode.exportTxt()">TXT</button>
+                                <button class="btn btn-sm btn-ghost" onclick="MorseMode.exportCsv()">CSV</button>
+                                <button class="btn btn-sm btn-ghost" id="morseCopyBtn" onclick="MorseMode.copyToClipboard()">Copy</button>
+                                <button class="btn btn-sm btn-ghost" onclick="MorseMode.clearText()">Clear</button>
+                            </div>
+                        </div>
+                        <div id="morseDecodedText" class="morse-decoded-panel"></div>
+                        <div class="morse-status-bar">
+                            <span class="status-item" id="morseStatusBarWpm">15 WPM</span>
+                            <span class="status-item" id="morseStatusBarTone">700 Hz</span>
+                            <span class="status-item" id="morseStatusBarChars">0 chars decoded</span>
+                        </div>
+                    </div>
+                </div>
 
                 <div class="output-content signal-feed" id="output">
                     <div class="placeholder signal-empty-state">
@@ -3125,6 +3175,7 @@
     <script src="{{ url_for('static', filename='js/modes/subghz.js') }}?v={{ version }}&r=subghz_layout9"></script>
     <script src="{{ url_for('static', filename='js/modes/bt_locate.js') }}?v={{ version }}&r=btlocate4"></script>
     <script src="{{ url_for('static', filename='js/modes/wefax.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modes/morse.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/space-weather.js') }}"></script>
     <script src="{{ url_for('static', filename='js/core/voice-alerts.js') }}?v={{ version }}&r=voicefix2"></script>
     <script src="{{ url_for('static', filename='js/core/keyboard-shortcuts.js') }}"></script>
@@ -3278,6 +3329,7 @@
             spystations: { label: 'Spy Stations', indicator: 'SPY STATIONS', outputTitle: 'Spy Stations', group: 'intel' },
             websdr: { label: 'WebSDR', indicator: 'WEBSDR', outputTitle: 'HF/Shortwave WebSDR', group: 'intel' },
             waterfall: { label: 'Waterfall', indicator: 'WATERFALL', outputTitle: 'Spectrum Waterfall', group: 'signals' },
+            morse: { label: 'Morse', indicator: 'MORSE', outputTitle: 'CW/Morse Decoder', group: 'signals' },
         };
         const validModes = new Set(Object.keys(modeCatalog));
         window.interceptModeCatalog = Object.assign({}, modeCatalog);
@@ -4036,6 +4088,7 @@
             document.getElementById('subghzMode')?.classList.toggle('active', mode === 'subghz');
             document.getElementById('spaceWeatherMode')?.classList.toggle('active', mode === 'spaceweather');
             document.getElementById('waterfallMode')?.classList.toggle('active', mode === 'waterfall');
+            document.getElementById('morseMode')?.classList.toggle('active', mode === 'morse');
 
 
             const pagerStats = document.getElementById('pagerStats');
@@ -4115,6 +4168,10 @@
             const sensorTimelineContainer = document.getElementById('sensorTimelineContainer');
             if (pagerTimelineContainer) pagerTimelineContainer.style.display = mode === 'pager' ? 'block' : 'none';
             if (sensorTimelineContainer) sensorTimelineContainer.style.display = mode === 'sensor' ? 'block' : 'none';
+            const morseScopePanel = document.getElementById('morseScopePanel');
+            const morseOutputPanel = document.getElementById('morseOutputPanel');
+            if (morseScopePanel && mode !== 'morse') morseScopePanel.style.display = 'none';
+            if (morseOutputPanel && mode !== 'morse') morseOutputPanel.style.display = 'none';
 
             // Update output panel title based on mode
             const outputTitle = document.getElementById('outputTitle');
@@ -4168,7 +4225,27 @@
 
             // Show RTL-SDR device section for modes that use it
             const rtlDeviceSection = document.getElementById('rtlDeviceSection');
-            if (rtlDeviceSection) rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax') ? 'block' : 'none';
+            if (rtlDeviceSection) {
+                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse') ? 'block' : 'none';
+                // Save original sidebar position of SDR device section (once)
+                if (!rtlDeviceSection._origParent) {
+                    rtlDeviceSection._origParent = rtlDeviceSection.parentNode;
+                    rtlDeviceSection._origNext = rtlDeviceSection.nextElementSibling;
+                }
+                // For morse mode, move SDR device section inside the morse panel after the title
+                const morsePanel = document.getElementById('morseMode');
+                if (mode === 'morse' && morsePanel) {
+                    const firstSection = morsePanel.querySelector('.section');
+                    if (firstSection) firstSection.after(rtlDeviceSection);
+                } else if (rtlDeviceSection._origParent && rtlDeviceSection.parentNode !== rtlDeviceSection._origParent) {
+                    // Restore to original sidebar position when leaving morse mode
+                    if (rtlDeviceSection._origNext) {
+                        rtlDeviceSection._origNext.before(rtlDeviceSection);
+                    } else {
+                        rtlDeviceSection._origParent.appendChild(rtlDeviceSection);
+                    }
+                }
+            }
 
             // Toggle mode-specific tool status displays
             const toolStatusPager = document.getElementById('toolStatusPager');
@@ -4252,6 +4329,8 @@
                 SpaceWeather.init();
             } else if (mode === 'waterfall') {
                 if (typeof Waterfall !== 'undefined') Waterfall.init();
+            } else if (mode === 'morse') {
+                MorseMode.init();
             }
 
             // Destroy Waterfall WebSocket when leaving SDR receiver modes

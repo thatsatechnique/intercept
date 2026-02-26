@@ -36,6 +36,7 @@ const Waterfall = (function () {
 
     let _startMhz = 98.8;
     let _endMhz = 101.2;
+    let _lastEffectiveSpan = 2.4;
     let _monitorFreqMhz = 100.0;
 
     let _monitoring = false;
@@ -2516,6 +2517,7 @@ const Waterfall = (function () {
                         _drawFreqAxis();
                     }
                     if (Number.isFinite(msg.effective_span_mhz)) {
+                        _lastEffectiveSpan = msg.effective_span_mhz;
                         const spanEl = document.getElementById('wfSpanMhz');
                         if (spanEl) spanEl.value = msg.effective_span_mhz;
                     }
@@ -2567,6 +2569,10 @@ const Waterfall = (function () {
                     _pendingMonitorTuneMhz = null;
                     _scanStartPending = false;
                     _pendingSharedMonitorRearm = false;
+                    // Reset span input to last known good value so an
+                    // invalid span doesn't persist across restart (#150).
+                    const spanEl = document.getElementById('wfSpanMhz');
+                    if (spanEl) spanEl.value = _lastEffectiveSpan;
                     // If the monitor was using the shared IQ stream that
                     // just failed, tear down the stale monitor state so
                     // the button becomes clickable again after restart.

@@ -138,36 +138,34 @@ def start_rtlamr() -> Response:
         output_format = data.get('format', 'json')
         
         # Start rtl_tcp first
+        rtl_tcp_just_started = False
+        rtl_tcp_cmd_str = ''
         with rtl_tcp_lock:
             if not rtl_tcp_process:
                 logger.info("Starting rtl_tcp server...")
                 try:
                     rtl_tcp_cmd = ['rtl_tcp', '-a', '0.0.0.0']
-                    
+
                     # Add device index if not 0
                     if device and device != '0':
                         rtl_tcp_cmd.extend(['-d', str(device)])
-                    
+
                     # Add gain if not auto
                     if gain and gain != '0':
                         rtl_tcp_cmd.extend(['-g', str(gain)])
-                    
+
                     # Add PPM correction if not 0
                     if ppm and ppm != '0':
                         rtl_tcp_cmd.extend(['-p', str(ppm)])
-                    
+
                     rtl_tcp_process = subprocess.Popen(
                         rtl_tcp_cmd,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE
                     )
                     register_process(rtl_tcp_process)
-
-                    # Wait a moment for rtl_tcp to start
-                    time.sleep(3)
-                    
-                    logger.info(f"rtl_tcp started: {' '.join(rtl_tcp_cmd)}")
-                    app_module.rtlamr_queue.put({'type': 'info', 'text': f'rtl_tcp: {" ".join(rtl_tcp_cmd)}'})
+                    rtl_tcp_just_started = True
+                    rtl_tcp_cmd_str = ' '.join(rtl_tcp_cmd)
                 except Exception as e:
                     logger.error(f"Failed to start rtl_tcp: {e}")
                     # Release SDR device on rtl_tcp failure
@@ -175,6 +173,12 @@ def start_rtlamr() -> Response:
                         app_module.release_sdr_device(rtlamr_active_device)
                         rtlamr_active_device = None
                     return jsonify({'status': 'error', 'message': f'Failed to start rtl_tcp: {e}'}), 500
+
+        # Wait for rtl_tcp to start outside lock
+        if rtl_tcp_just_started:
+            time.sleep(3)
+            logger.info(f"rtl_tcp started: {rtl_tcp_cmd_str}")
+            app_module.rtlamr_queue.put({'type': 'info', 'text': f'rtl_tcp: {rtl_tcp_cmd_str}'})
 
         # Build rtlamr command
         cmd = [
@@ -258,25 +262,34 @@ def start_rtlamr() -> Response:
 def stop_rtlamr() -> Response:
     global rtl_tcp_process, rtlamr_active_device
 
+    # Grab process refs inside locks, clear state, then terminate outside
+    rtlamr_proc = None
     with app_module.rtlamr_lock:
         if app_module.rtlamr_process:
-            app_module.rtlamr_process.terminate()
-            try:
-                app_module.rtlamr_process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                app_module.rtlamr_process.kill()
+            rtlamr_proc = app_module.rtlamr_process
             app_module.rtlamr_process = None
 
+    if rtlamr_proc:
+        rtlamr_proc.terminate()
+        try:
+            rtlamr_proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            rtlamr_proc.kill()
+
     # Also stop rtl_tcp
+    tcp_proc = None
     with rtl_tcp_lock:
         if rtl_tcp_process:
-            rtl_tcp_process.terminate()
-            try:
-                rtl_tcp_process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                rtl_tcp_process.kill()
+            tcp_proc = rtl_tcp_process
             rtl_tcp_process = None
-            logger.info("rtl_tcp stopped")
+
+    if tcp_proc:
+        tcp_proc.terminate()
+        try:
+            tcp_proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            tcp_proc.kill()
+        logger.info("rtl_tcp stopped")
 
     # Release device from registry
     if rtlamr_active_device is not None:

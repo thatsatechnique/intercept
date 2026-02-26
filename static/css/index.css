@@ -202,10 +202,38 @@ body {
 }
 
 .welcome-container {
+    position: relative;
     width: 90%;
     max-width: 900px;
     z-index: 1;
     animation: welcomeFadeIn 0.8s ease-out;
+    max-height: calc(100vh - 40px);
+    overflow: hidden;
+}
+
+.welcome-settings-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 2;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    color: var(--text-dim, rgba(255, 255, 255, 0.3));
+    transition: color 0.2s, background 0.2s;
+}
+
+.welcome-settings-btn:hover {
+    color: var(--accent-cyan, #00d4ff);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.welcome-settings-btn svg {
+    width: 20px;
+    height: 20px;
+    display: block;
 }
 
 @keyframes welcomeFadeIn {
@@ -232,6 +260,7 @@ body {
 
 .welcome-logo {
     animation: logoPulse 3s ease-in-out infinite;
+    will-change: filter;
 }
 
 @keyframes logoPulse {
@@ -332,6 +361,7 @@ body {
     padding: 20px;
     max-height: calc(100vh - 300px);
     overflow-y: auto;
+    scrollbar-gutter: stable;
 }
 
 .changelog-release {

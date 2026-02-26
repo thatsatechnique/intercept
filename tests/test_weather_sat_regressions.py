@@ -106,13 +106,14 @@ class TestWeatherSatDecoderRegressions:
             mock_resolve.return_value = resolved
 
             decoder = WeatherSatDecoder(output_dir=tmp_path / 'weather_sat_out')
-            success = decoder.start_from_file(
+            success, error_msg = decoder.start_from_file(
                 satellite='METEOR-M2-3',
                 input_file='data/weather_sat/samples/sample.wav',
                 sample_rate=1_000_000,
             )
 
             assert success is True
+            assert error_msg is None
             assert decoder.device_index == -1
             mock_start.assert_called_once()
 

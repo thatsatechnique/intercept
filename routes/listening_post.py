@@ -678,8 +678,8 @@ def _start_audio_stream(
     """Start audio streaming at given frequency."""
     global audio_process, audio_rtl_process, audio_running, audio_frequency, audio_modulation
 
+    # Stop existing stream and snapshot config under lock
     with audio_lock:
-        # Stop any existing stream
         _stop_audio_stream_internal()
 
         ffmpeg_path = find_ffmpeg()
@@ -695,208 +695,214 @@ def _start_audio_stream(
         bias_t_enabled = bool(scanner_config.get('bias_t', False) if bias_t is None else bias_t)
         sdr_type_str = str(sdr_type if sdr_type is not None else scanner_config.get('sdr_type', 'rtlsdr')).lower()
 
-        # Determine SDR type and build appropriate command
-        try:
-            sdr_type = SDRType(sdr_type_str)
-        except ValueError:
-            sdr_type = SDRType.RTL_SDR
+    # Build commands outside lock (no blocking I/O, just command construction)
+    try:
+        resolved_sdr_type = SDRType(sdr_type_str)
+    except ValueError:
+        resolved_sdr_type = SDRType.RTL_SDR
 
-        # Set sample rates based on modulation
-        if modulation == 'wfm':
-            sample_rate = 170000
-            resample_rate = 32000
-        elif modulation in ['usb', 'lsb']:
-            sample_rate = 12000
-            resample_rate = 12000
-        else:
-            sample_rate = 24000
-            resample_rate = 24000
+    # Set sample rates based on modulation
+    if modulation == 'wfm':
+        sample_rate = 170000
+        resample_rate = 32000
+    elif modulation in ['usb', 'lsb']:
+        sample_rate = 12000
+        resample_rate = 12000
+    else:
+        sample_rate = 24000
+        resample_rate = 24000
 
-        # Build the SDR command based on device type
-        if sdr_type == SDRType.RTL_SDR:
-            # Use rtl_fm for RTL-SDR devices
-            rtl_fm_path = find_rtl_fm()
-            if not rtl_fm_path:
-                logger.error("rtl_fm not found")
-                return
+    # Build the SDR command based on device type
+    if resolved_sdr_type == SDRType.RTL_SDR:
+        rtl_fm_path = find_rtl_fm()
+        if not rtl_fm_path:
+            logger.error("rtl_fm not found")
+            return
 
-            freq_hz = int(frequency * 1e6)
-            sdr_cmd = [
-                rtl_fm_path,
-                '-M', _rtl_fm_demod_mode(modulation),
-                '-f', str(freq_hz),
-                '-s', str(sample_rate),
-                '-r', str(resample_rate),
-                '-g', str(gain_value),
-                '-d', str(device_index),
-                '-l', str(squelch_value),
-            ]
-            if bias_t_enabled:
-                sdr_cmd.append('-T')
-            # Omit explicit filename: rtl_fm defaults to stdout.
-            # (Some builds intermittently stall when '-' is passed explicitly.)
-        else:
-            # Use SDR abstraction layer for HackRF, Airspy, LimeSDR, SDRPlay
-            rx_fm_path = find_rx_fm()
-            if not rx_fm_path:
-                logger.error(f"rx_fm not found - required for {sdr_type.value}. Install SoapySDR utilities.")
-                return
-
-            # Create device and get command builder
-            sdr_device = SDRFactory.create_default_device(sdr_type, index=device_index)
-            builder = SDRFactory.get_builder(sdr_type)
-
-            # Build FM demod command
-            sdr_cmd = builder.build_fm_demod_command(
-                device=sdr_device,
-                frequency_mhz=frequency,
-                sample_rate=resample_rate,
-                gain=float(gain_value),
-                modulation=modulation,
-                squelch=squelch_value,
-                bias_t=bias_t_enabled,
-            )
-            # Ensure we use the found rx_fm path
-            sdr_cmd[0] = rx_fm_path
-
-        encoder_cmd = [
-            ffmpeg_path,
-            '-hide_banner',
-            '-loglevel', 'error',
-            '-fflags', 'nobuffer',
-            '-flags', 'low_delay',
-            '-probesize', '32',
-            '-analyzeduration', '0',
-            '-f', 's16le',
-            '-ar', str(resample_rate),
-            '-ac', '1',
-            '-i', 'pipe:0',
-            '-acodec', 'pcm_s16le',
-            '-ar', '44100',
-            '-f', 'wav',
-            'pipe:1'
+        freq_hz = int(frequency * 1e6)
+        sdr_cmd = [
+            rtl_fm_path,
+            '-M', _rtl_fm_demod_mode(modulation),
+            '-f', str(freq_hz),
+            '-s', str(sample_rate),
+            '-r', str(resample_rate),
+            '-g', str(gain_value),
+            '-d', str(device_index),
+            '-l', str(squelch_value),
         ]
+        if bias_t_enabled:
+            sdr_cmd.append('-T')
+    else:
+        rx_fm_path = find_rx_fm()
+        if not rx_fm_path:
+            logger.error(f"rx_fm not found - required for {resolved_sdr_type.value}. Install SoapySDR utilities.")
+            return
 
-        try:
-            # Use subprocess piping for reliable streaming.
-            # Log stderr to temp files for error diagnosis.
-            rtl_stderr_log = '/tmp/rtl_fm_stderr.log'
-            ffmpeg_stderr_log = '/tmp/ffmpeg_stderr.log'
-            logger.info(f"Starting audio: {frequency} MHz, mod={modulation}, device={device_index}")
+        sdr_device = SDRFactory.create_default_device(resolved_sdr_type, index=device_index)
+        builder = SDRFactory.get_builder(resolved_sdr_type)
+        sdr_cmd = builder.build_fm_demod_command(
+            device=sdr_device,
+            frequency_mhz=frequency,
+            sample_rate=resample_rate,
+            gain=float(gain_value),
+            modulation=modulation,
+            squelch=squelch_value,
+            bias_t=bias_t_enabled,
+        )
+        sdr_cmd[0] = rx_fm_path
 
-            # Retry loop for USB device contention (device may not be
-            # released immediately after a previous process exits)
-            max_attempts = 3
-            for attempt in range(max_attempts):
-                audio_rtl_process = None
-                audio_process = None
-                rtl_err_handle = None
-                ffmpeg_err_handle = None
-                try:
-                    rtl_err_handle = open(rtl_stderr_log, 'w')
-                    ffmpeg_err_handle = open(ffmpeg_stderr_log, 'w')
-                    audio_rtl_process = subprocess.Popen(
-                        sdr_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=rtl_err_handle,
-                        bufsize=0,
-                        start_new_session=True  # Create new process group for clean shutdown
-                    )
-                    audio_process = subprocess.Popen(
-                        encoder_cmd,
-                        stdin=audio_rtl_process.stdout,
-                        stdout=subprocess.PIPE,
-                        stderr=ffmpeg_err_handle,
-                        bufsize=0,
-                        start_new_session=True  # Create new process group for clean shutdown
-                    )
-                    if audio_rtl_process.stdout:
-                        audio_rtl_process.stdout.close()
-                finally:
-                    if rtl_err_handle:
-                        rtl_err_handle.close()
-                    if ffmpeg_err_handle:
-                        ffmpeg_err_handle.close()
+    encoder_cmd = [
+        ffmpeg_path,
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-fflags', 'nobuffer',
+        '-flags', 'low_delay',
+        '-probesize', '32',
+        '-analyzeduration', '0',
+        '-f', 's16le',
+        '-ar', str(resample_rate),
+        '-ac', '1',
+        '-i', 'pipe:0',
+        '-acodec', 'pcm_s16le',
+        '-ar', '44100',
+        '-f', 'wav',
+        'pipe:1'
+    ]
 
-                # Brief delay to check if process started successfully
-                time.sleep(0.3)
+    # Retry loop outside lock — spawning + health check sleeps don't block
+    # other operations. audio_start_lock already serializes callers.
+    try:
+        rtl_stderr_log = '/tmp/rtl_fm_stderr.log'
+        ffmpeg_stderr_log = '/tmp/ffmpeg_stderr.log'
+        logger.info(f"Starting audio: {frequency} MHz, mod={modulation}, device={device_index}")
 
-                if (audio_rtl_process and audio_rtl_process.poll() is not None) or (
-                    audio_process and audio_process.poll() is not None
-                ):
-                    # Read stderr from temp files
-                    rtl_stderr = ''
-                    ffmpeg_stderr = ''
-                    try:
-                        with open(rtl_stderr_log, 'r') as f:
-                            rtl_stderr = f.read().strip()
-                    except Exception:
-                        pass
-                    try:
-                        with open(ffmpeg_stderr_log, 'r') as f:
-                            ffmpeg_stderr = f.read().strip()
-                    except Exception:
-                        pass
+        new_rtl_proc = None
+        new_audio_proc = None
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            new_rtl_proc = None
+            new_audio_proc = None
+            rtl_err_handle = None
+            ffmpeg_err_handle = None
+            try:
+                rtl_err_handle = open(rtl_stderr_log, 'w')
+                ffmpeg_err_handle = open(ffmpeg_stderr_log, 'w')
+                new_rtl_proc = subprocess.Popen(
+                    sdr_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=rtl_err_handle,
+                    bufsize=0,
+                    start_new_session=True
+                )
+                new_audio_proc = subprocess.Popen(
+                    encoder_cmd,
+                    stdin=new_rtl_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=ffmpeg_err_handle,
+                    bufsize=0,
+                    start_new_session=True
+                )
+                if new_rtl_proc.stdout:
+                    new_rtl_proc.stdout.close()
+            finally:
+                if rtl_err_handle:
+                    rtl_err_handle.close()
+                if ffmpeg_err_handle:
+                    ffmpeg_err_handle.close()
 
-                    if 'usb_claim_interface' in rtl_stderr and attempt < max_attempts - 1:
-                        logger.warning(f"USB device busy (attempt {attempt + 1}/{max_attempts}), waiting for release...")
-                        if audio_process:
-                            try:
-                                audio_process.terminate()
-                                audio_process.wait(timeout=0.5)
-                            except Exception:
-                                pass
-                        if audio_rtl_process:
-                            try:
-                                audio_rtl_process.terminate()
-                                audio_rtl_process.wait(timeout=0.5)
-                            except Exception:
-                                pass
-                        time.sleep(1.0)
-                        continue
+            # Brief delay to check if process started successfully
+            time.sleep(0.3)
 
-                    if audio_process and audio_process.poll() is None:
-                        try:
-                            audio_process.terminate()
-                            audio_process.wait(timeout=0.5)
-                        except Exception:
-                            pass
-                    if audio_rtl_process and audio_rtl_process.poll() is None:
-                        try:
-                            audio_rtl_process.terminate()
-                            audio_rtl_process.wait(timeout=0.5)
-                        except Exception:
-                            pass
-                    audio_process = None
-                    audio_rtl_process = None
-
-                    logger.error(
-                        f"Audio pipeline exited immediately. rtl_fm stderr: {rtl_stderr}, ffmpeg stderr: {ffmpeg_stderr}"
-                    )
-                    return
-
-                # Pipeline started successfully
-                break
-
-            # Keep monitor startup tolerant: some demod chains can take
-            # several seconds before producing stream bytes.
-            if (
-                not audio_process
-                or not audio_rtl_process
-                or audio_process.poll() is not None
-                or audio_rtl_process.poll() is not None
+            if (new_rtl_proc and new_rtl_proc.poll() is not None) or (
+                new_audio_proc and new_audio_proc.poll() is not None
             ):
-                logger.warning("Audio pipeline did not remain alive after startup")
-                _stop_audio_stream_internal()
+                rtl_stderr = ''
+                ffmpeg_stderr = ''
+                try:
+                    with open(rtl_stderr_log, 'r') as f:
+                        rtl_stderr = f.read().strip()
+                except Exception:
+                    pass
+                try:
+                    with open(ffmpeg_stderr_log, 'r') as f:
+                        ffmpeg_stderr = f.read().strip()
+                except Exception:
+                    pass
+
+                if 'usb_claim_interface' in rtl_stderr and attempt < max_attempts - 1:
+                    logger.warning(f"USB device busy (attempt {attempt + 1}/{max_attempts}), waiting for release...")
+                    if new_audio_proc:
+                        try:
+                            new_audio_proc.terminate()
+                            new_audio_proc.wait(timeout=0.5)
+                        except Exception:
+                            pass
+                    if new_rtl_proc:
+                        try:
+                            new_rtl_proc.terminate()
+                            new_rtl_proc.wait(timeout=0.5)
+                        except Exception:
+                            pass
+                    time.sleep(1.0)
+                    continue
+
+                if new_audio_proc and new_audio_proc.poll() is None:
+                    try:
+                        new_audio_proc.terminate()
+                        new_audio_proc.wait(timeout=0.5)
+                    except Exception:
+                        pass
+                if new_rtl_proc and new_rtl_proc.poll() is None:
+                    try:
+                        new_rtl_proc.terminate()
+                        new_rtl_proc.wait(timeout=0.5)
+                    except Exception:
+                        pass
+                new_audio_proc = None
+                new_rtl_proc = None
+
+                logger.error(
+                    f"Audio pipeline exited immediately. rtl_fm stderr: {rtl_stderr}, ffmpeg stderr: {ffmpeg_stderr}"
+                )
                 return
 
+            # Pipeline started successfully
+            break
+
+        # Verify pipeline is still alive, then install under lock
+        if (
+            not new_audio_proc
+            or not new_rtl_proc
+            or new_audio_proc.poll() is not None
+            or new_rtl_proc.poll() is not None
+        ):
+            logger.warning("Audio pipeline did not remain alive after startup")
+            # Clean up failed processes
+            if new_audio_proc:
+                try:
+                    new_audio_proc.terminate()
+                    new_audio_proc.wait(timeout=0.5)
+                except Exception:
+                    pass
+            if new_rtl_proc:
+                try:
+                    new_rtl_proc.terminate()
+                    new_rtl_proc.wait(timeout=0.5)
+                except Exception:
+                    pass
+            return
+
+        # Install processes under lock
+        with audio_lock:
+            audio_rtl_process = new_rtl_proc
+            audio_process = new_audio_proc
             audio_running = True
             audio_frequency = frequency
             audio_modulation = modulation
-            logger.info(f"Audio stream started: {frequency} MHz ({modulation}) via {sdr_type.value}")
+            logger.info(f"Audio stream started: {frequency} MHz ({modulation}) via {resolved_sdr_type.value}")
 
-        except Exception as e:
-            logger.error(f"Failed to start audio stream: {e}")
+    except Exception as e:
+        logger.error(f"Failed to start audio stream: {e}")
 
 
 def _stop_audio_stream():
@@ -1343,32 +1349,19 @@ def start_audio() -> Response:
             audio_start_token += 1
             request_token = audio_start_token
 
-        # Stop scanner if running
+        # Grab scanner refs inside lock, signal stop, clear state
+        need_scanner_teardown = False
+        scanner_thread_ref = None
+        scanner_proc_ref = None
         if scanner_running:
             scanner_running = False
             if scanner_active_device is not None:
                 app_module.release_sdr_device(scanner_active_device)
                 scanner_active_device = None
-            if scanner_thread and scanner_thread.is_alive():
-                try:
-                    scanner_thread.join(timeout=2.0)
-                except Exception:
-                    pass
-            if scanner_power_process and scanner_power_process.poll() is None:
-                try:
-                    scanner_power_process.terminate()
-                    scanner_power_process.wait(timeout=1)
-                except Exception:
-                    try:
-                        scanner_power_process.kill()
-                    except Exception:
-                        pass
-                scanner_power_process = None
-            try:
-                subprocess.run(['pkill', '-9', 'rtl_power'], capture_output=True, timeout=0.5)
-            except Exception:
-                pass
-            time.sleep(0.5)
+            scanner_thread_ref = scanner_thread
+            scanner_proc_ref = scanner_power_process
+            scanner_power_process = None
+            need_scanner_teardown = True
 
         # Update config for audio
         scanner_config['squelch'] = squelch
@@ -1376,6 +1369,31 @@ def start_audio() -> Response:
         scanner_config['device'] = device
         scanner_config['sdr_type'] = sdr_type
         scanner_config['bias_t'] = bias_t
+
+    # Scanner teardown outside lock (blocking: thread join, process wait, pkill, sleep)
+    if need_scanner_teardown:
+        if scanner_thread_ref and scanner_thread_ref.is_alive():
+            try:
+                scanner_thread_ref.join(timeout=2.0)
+            except Exception:
+                pass
+        if scanner_proc_ref and scanner_proc_ref.poll() is None:
+            try:
+                scanner_proc_ref.terminate()
+                scanner_proc_ref.wait(timeout=1)
+            except Exception:
+                try:
+                    scanner_proc_ref.kill()
+                except Exception:
+                    pass
+        try:
+            subprocess.run(['pkill', '-9', 'rtl_power'], capture_output=True, timeout=0.5)
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    # Re-acquire lock for waterfall check and device claim
+    with audio_start_lock:
 
         # Preferred path: when waterfall WebSocket is active on the same SDR,
         # derive monitor audio from that IQ stream instead of spawning rtl_fm.

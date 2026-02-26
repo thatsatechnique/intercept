@@ -342,7 +342,7 @@ class WeatherSatScheduler:
 
         decoder.set_on_complete(lambda: self._on_capture_complete(sp, _release_device))
 
-        success = decoder.start(
+        success, _error_msg = decoder.start(
             satellite=sp.satellite,
             device_index=self._device,
             gain=self._gain,

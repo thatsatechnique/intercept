@@ -299,14 +299,7 @@ class WeFaxDecoder:
             try:
                 self._running = True
                 self._last_error = ''
-                self._start_pipeline()
-
-                logger.info(
-                    f"WeFax decoder started: {frequency_khz} kHz, "
-                    f"station={station}, IOC={ioc}, LPM={lpm}"
-                )
-                return True
-
+                self._start_pipeline_spawn()
             except Exception as e:
                 self._running = False
                 self._last_error = str(e)
@@ -317,8 +310,32 @@ class WeFaxDecoder:
                 ))
                 return False
 
+        # Health check sleep outside lock
+        try:
+            self._start_pipeline_health_check()
+            logger.info(
+                f"WeFax decoder started: {frequency_khz} kHz, "
+                f"station={station}, IOC={ioc}, LPM={lpm}"
+            )
+            return True
+        except Exception as e:
+            with self._lock:
+                self._running = False
+                self._last_error = str(e)
+            logger.error(f"Failed to start WeFax decoder: {e}")
+            self._emit_progress(WeFaxProgress(
+                status='error',
+                message=str(e),
+            ))
+            return False
+
     def _start_pipeline(self) -> None:
         """Start SDR FM demod subprocess in USB mode for WeFax."""
+        self._start_pipeline_spawn()
+        self._start_pipeline_health_check()
+
+    def _start_pipeline_spawn(self) -> None:
+        """Spawn the SDR FM demod subprocess. Must hold self._lock."""
         try:
             sdr_type_enum = SDRType(self._sdr_type)
         except ValueError:
@@ -361,21 +378,24 @@ class WeFaxDecoder:
             stderr=subprocess.PIPE,
         )
 
-        # Post-spawn health check — catch immediate failures
+    def _start_pipeline_health_check(self) -> None:
+        """Post-spawn health check and decode thread start. Called outside lock."""
         time.sleep(0.3)
-        if self._sdr_process.poll() is not None:
-            stderr_detail = ''
-            if self._sdr_process.stderr:
-                stderr_detail = self._sdr_process.stderr.read().decode(
-                    errors='replace').strip()
-            rc = self._sdr_process.returncode
-            self._sdr_process = None
-            detail = stderr_detail.split('\n')[-1] if stderr_detail else f'exit code {rc}'
-            raise RuntimeError(f'{self._sdr_tool_name} failed: {detail}')
 
-        self._decode_thread = threading.Thread(
-            target=self._decode_audio_stream, daemon=True)
-        self._decode_thread.start()
+        with self._lock:
+            if self._sdr_process and self._sdr_process.poll() is not None:
+                stderr_detail = ''
+                if self._sdr_process.stderr:
+                    stderr_detail = self._sdr_process.stderr.read().decode(
+                        errors='replace').strip()
+                rc = self._sdr_process.returncode
+                self._sdr_process = None
+                detail = stderr_detail.split('\n')[-1] if stderr_detail else f'exit code {rc}'
+                raise RuntimeError(f'{self._sdr_tool_name} failed: {detail}')
+
+            self._decode_thread = threading.Thread(
+                target=self._decode_audio_stream, daemon=True)
+            self._decode_thread.start()
 
     def _decode_audio_stream(self) -> None:
         """Read audio from SDR FM demod and decode WeFax images.

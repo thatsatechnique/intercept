@@ -73,7 +73,7 @@ class TestWeatherSatRoutes:
 
             mock_decoder = MagicMock()
             mock_decoder.is_running = False
-            mock_decoder.start.return_value = True
+            mock_decoder.start.return_value = (True, None)
             mock_get.return_value = mock_decoder
 
             payload = {
@@ -233,7 +233,7 @@ class TestWeatherSatRoutes:
 
             mock_decoder = MagicMock()
             mock_decoder.is_running = False
-            mock_decoder.start.return_value = False
+            mock_decoder.start.return_value = (False, 'SatDump exited immediately (code 1)')
             mock_get.return_value = mock_decoder
 
             payload = {'satellite': 'NOAA-18'}
@@ -246,7 +246,7 @@ class TestWeatherSatRoutes:
             assert response.status_code == 500
             data = response.get_json()
             assert data['status'] == 'error'
-            assert 'Failed to start capture' in data['message']
+            assert 'SatDump exited immediately' in data['message']
 
     def test_test_decode_success(self, client):
         """POST /weather-sat/test-decode successfully starts file decode."""
@@ -262,7 +262,7 @@ class TestWeatherSatRoutes:
 
             mock_decoder = MagicMock()
             mock_decoder.is_running = False
-            mock_decoder.start_from_file.return_value = True
+            mock_decoder.start_from_file.return_value = (True, None)
             mock_get.return_value = mock_decoder
 
             payload = {

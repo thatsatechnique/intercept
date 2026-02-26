@@ -546,7 +546,7 @@ class TestWeatherSatScheduler:
 
         mock_decoder = MagicMock()
         mock_decoder.is_running = False
-        mock_decoder.start.return_value = True
+        mock_decoder.start.return_value = (True, None)
         mock_get.return_value = mock_decoder
 
         mock_timer_instance = MagicMock()
@@ -590,7 +590,7 @@ class TestWeatherSatScheduler:
 
         mock_decoder = MagicMock()
         mock_decoder.is_running = False
-        mock_decoder.start.return_value = False
+        mock_decoder.start.return_value = (False, 'Start failed')
         mock_get.return_value = mock_decoder
 
         pass_data = {
@@ -798,7 +798,7 @@ class TestSchedulerIntegration:
 
         mock_decoder = MagicMock()
         mock_decoder.is_running = False
-        mock_decoder.start.return_value = True
+        mock_decoder.start.return_value = (True, None)
         mock_get_decoder.return_value = mock_decoder
 
         scheduler = WeatherSatScheduler()

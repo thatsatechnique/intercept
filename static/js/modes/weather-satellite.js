@@ -262,10 +262,13 @@ const WeatherSat = (function() {
      * Stop capture
      */
     async function stop() {
+        // Optimistically update UI immediately so stop feels responsive,
+        // even if the server takes time to terminate the process.
+        isRunning = false;
+        stopStream();
+        updateStatusUI('idle', 'Stopping...');
         try {
             await fetch('/weather-sat/stop', { method: 'POST' });
-            isRunning = false;
-            stopStream();
             updateStatusUI('idle', 'Stopped');
             showNotification('Weather Sat', 'Capture stopped');
         } catch (err) {

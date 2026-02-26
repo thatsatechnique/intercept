@@ -376,63 +376,82 @@ class MeshtasticClient:
             self._error = "Meshtastic SDK not installed. Install with: pip install meshtastic"
             return False
 
+        # Quick check under lock — bail if already running
         with self._lock:
             if self._running:
                 return True
 
-            try:
-                # Subscribe to message events before connecting
-                pub.subscribe(self._on_receive, "meshtastic.receive")
-                pub.subscribe(self._on_connection, "meshtastic.connection.established")
-                pub.subscribe(self._on_disconnect, "meshtastic.connection.lost")
+        # Create interface outside lock (blocking I/O: serial/TCP connect)
+        new_interface = None
+        new_device_path = None
+        new_connection_type = None
+        try:
+            # Subscribe to message events before connecting
+            pub.subscribe(self._on_receive, "meshtastic.receive")
+            pub.subscribe(self._on_connection, "meshtastic.connection.established")
+            pub.subscribe(self._on_disconnect, "meshtastic.connection.lost")
 
-                # Connect based on connection type
-                if connection_type == 'tcp':
-                    if not hostname:
-                        self._error = "Hostname is required for TCP connections"
-                        self._cleanup_subscriptions()
-                        return False
-                    self._interface = meshtastic.tcp_interface.TCPInterface(hostname=hostname)
-                    self._device_path = hostname
-                    self._connection_type = 'tcp'
-                    logger.info(f"Connected to Meshtastic device via TCP: {hostname}")
+            if connection_type == 'tcp':
+                if not hostname:
+                    self._error = "Hostname is required for TCP connections"
+                    self._cleanup_subscriptions()
+                    return False
+                new_interface = meshtastic.tcp_interface.TCPInterface(hostname=hostname)
+                new_device_path = hostname
+                new_connection_type = 'tcp'
+                logger.info(f"Connected to Meshtastic device via TCP: {hostname}")
+            else:
+                if device:
+                    new_interface = meshtastic.serial_interface.SerialInterface(device)
+                    new_device_path = device
                 else:
-                    # Serial connection (default)
-                    if device:
-                        self._interface = meshtastic.serial_interface.SerialInterface(device)
-                        self._device_path = device
-                    else:
-                        # Auto-discover
-                        self._interface = meshtastic.serial_interface.SerialInterface()
-                        self._device_path = "auto"
-                    self._connection_type = 'serial'
-                    logger.info(f"Connected to Meshtastic device via serial: {self._device_path}")
+                    new_interface = meshtastic.serial_interface.SerialInterface()
+                    new_device_path = "auto"
+                new_connection_type = 'serial'
+                logger.info(f"Connected to Meshtastic device via serial: {new_device_path}")
+        except Exception as e:
+            self._error = str(e)
+            logger.error(f"Failed to connect to Meshtastic: {e}")
+            self._cleanup_subscriptions()
+            return False
 
-                self._running = True
-                self._error = None
+        # Install interface under lock
+        with self._lock:
+            if self._running:
+                # Another thread connected while we were connecting — discard ours
+                if new_interface:
+                    try:
+                        new_interface.close()
+                    except Exception:
+                        pass
                 return True
 
-            except Exception as e:
-                self._error = str(e)
-                logger.error(f"Failed to connect to Meshtastic: {e}")
-                self._cleanup_subscriptions()
-                return False
+            self._interface = new_interface
+            self._device_path = new_device_path
+            self._connection_type = new_connection_type
+            self._running = True
+            self._error = None
+            return True
 
     def disconnect(self) -> None:
         """Disconnect from the Meshtastic device."""
+        iface_to_close = None
         with self._lock:
-            if self._interface:
-                try:
-                    self._interface.close()
-                except Exception as e:
-                    logger.warning(f"Error closing Meshtastic interface: {e}")
-                self._interface = None
-
+            iface_to_close = self._interface
+            self._interface = None
             self._cleanup_subscriptions()
             self._running = False
             self._device_path = None
             self._connection_type = None
-            logger.info("Disconnected from Meshtastic device")
+
+        # Close interface outside lock (blocking I/O)
+        if iface_to_close:
+            try:
+                iface_to_close.close()
+            except Exception as e:
+                logger.warning(f"Error closing Meshtastic interface: {e}")
+
+        logger.info("Disconnected from Meshtastic device")
 
     def _cleanup_subscriptions(self) -> None:
         """Unsubscribe from pubsub topics."""

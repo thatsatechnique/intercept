@@ -198,6 +198,11 @@ tscm_lock = threading.Lock()
 subghz_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
 subghz_lock = threading.Lock()
 
+# CW/Morse code decoder
+morse_process = None
+morse_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
+morse_lock = threading.Lock()
+
 # Deauth Attack Detection
 deauth_detector = None
 deauth_detector_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
@@ -755,6 +760,7 @@ def health_check() -> Response:
             'wifi': wifi_active,
             'bluetooth': bt_active,
             'dsc': dsc_process is not None and (dsc_process.poll() is None if dsc_process else False),
+            'morse': morse_process is not None and (morse_process.poll() is None if morse_process else False),
             'subghz': _get_subghz_active(),
         },
         'data': {
@@ -772,7 +778,7 @@ def health_check() -> Response:
 def kill_all() -> Response:
     """Kill all decoder, WiFi, and Bluetooth processes."""
     global current_process, sensor_process, wifi_process, adsb_process, ais_process, acars_process
-    global vdl2_process
+    global vdl2_process, morse_process
     global aprs_process, aprs_rtl_process, dsc_process, dsc_rtl_process, bt_process
 
     # Import adsb and ais modules to reset their state
@@ -824,6 +830,10 @@ def kill_all() -> Response:
     # Reset VDL2 state
     with vdl2_lock:
         vdl2_process = None
+
+    # Reset Morse state
+    with morse_lock:
+        morse_process = None
 
     # Reset APRS state
     with aprs_lock:
