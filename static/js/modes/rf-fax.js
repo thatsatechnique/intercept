@@ -61,6 +61,7 @@ var RfFaxMode = (function () {
     function start() {
         if (state.running) return;
 
+        var rtlTcpHost = (document.getElementById('rfFaxRtlTcpHost')?.value || '').trim();
         var payload = {
             frequency: document.getElementById('rfFaxFrequency').value || '433.400',
             gain: document.getElementById('rfFaxGain').value || '0',
@@ -72,6 +73,10 @@ var RfFaxMode = (function () {
             expected_lines: document.getElementById('rfFaxExpectedLines').value || '11',
             bias_t: typeof getBiasTEnabled === 'function' ? getBiasTEnabled() : false,
         };
+        if (rtlTcpHost) {
+            payload.rtl_tcp_host = rtlTcpHost;
+            payload.rtl_tcp_port = parseInt(document.getElementById('rfFaxRtlTcpPort')?.value || '1234', 10);
+        }
 
         state.expectedLines = parseInt(payload.expected_lines, 10) || 11;
 
@@ -164,25 +169,23 @@ var RfFaxMode = (function () {
         // Update line count display
         var countEl = document.getElementById('rfFaxLineCount');
         if (countEl) {
-            countEl.textContent = msg.lines_received + ' / ' + msg.lines_expected + ' lines';
+            countEl.textContent = msg.lines_received + ' lines';
         }
         var barLines = document.getElementById('rfFaxStatusBarLines');
         if (barLines) {
-            barLines.textContent = msg.lines_received + ' / ' + msg.lines_expected + ' lines';
+            barLines.textContent = msg.lines_received + ' lines';
         }
 
-        // Update bitmap in-memory for progressive rendering
+        // Update bitmap in-memory for progressive rendering (unbounded — streaming mode)
         if (!state.bitmap) {
             state.bitmap = [];
-            for (var i = 0; i < state.expectedLines; i++) {
-                state.bitmap.push([]);
-            }
         }
-        if (msg.line_num < state.expectedLines) {
-            state.bitmap[msg.line_num] = msg.pixels;
-            if (msg.pixels.length > state.widthPixels) {
-                state.widthPixels = msg.pixels.length;
-            }
+        while (state.bitmap.length <= msg.line_num) {
+            state.bitmap.push([]);
+        }
+        state.bitmap[msg.line_num] = msg.pixels;
+        if (msg.pixels.length > state.widthPixels) {
+            state.widthPixels = msg.pixels.length;
         }
 
         // Progressive canvas render
@@ -200,40 +203,28 @@ var RfFaxMode = (function () {
     }
 
     function handleImage(msg) {
-        state.imageCount = msg.image_count;
-        state.bitmap = msg.bitmap;
-        state.widthPixels = msg.width;
-
-        renderBitmap();
-
-        // Show completion message in log
-        var logPanel = document.getElementById('rfFaxLog');
-        if (logPanel) {
-            var div = document.createElement('div');
-            div.style.cssText = 'color: #00ff88; font-weight: bold; padding: 4px 0; border-top: 1px solid #333;';
-            div.textContent = '✓ Image #' + msg.image_count + ' complete (' +
-                msg.width + '×' + msg.height + 'px) — ' + msg.timestamp;
-            logPanel.appendChild(div);
-            logPanel.scrollTop = logPanel.scrollHeight;
+        // rf_fax_image is no longer emitted by the backend in streaming mode.
+        // Kept for compatibility if a future caller sends it.
+        if (msg.bitmap) {
+            state.bitmap = msg.bitmap;
+            state.widthPixels = msg.width || state.widthPixels;
+            renderBitmap();
         }
-
-        // Reset bitmap for next cycle
-        state.bitmap = null;
-        state.widthPixels = 0;
     }
 
     // ---- Canvas rendering ----
 
     function renderBitmap() {
         var canvas = document.getElementById('rfFaxCanvas');
-        if (!canvas || !state.bitmap || state.widthPixels === 0) return;
+        if (!canvas || !state.bitmap || state.bitmap.length === 0 || state.widthPixels === 0) return;
 
+        var numRows = state.bitmap.length;
         var pixelSize = Math.max(1, Math.floor(canvas.parentElement.clientWidth / state.widthPixels));
         pixelSize = Math.min(pixelSize, 12); // cap pixel size
 
         var dpr = window.devicePixelRatio || 1;
         var w = state.widthPixels * pixelSize;
-        var h = state.expectedLines * pixelSize;
+        var h = numRows * pixelSize;
 
         canvas.width = w * dpr;
         canvas.height = h * dpr;
@@ -248,7 +239,7 @@ var RfFaxMode = (function () {
         ctx.fillRect(0, 0, w, h);
 
         // Draw pixels
-        for (var row = 0; row < state.expectedLines; row++) {
+        for (var row = 0; row < numRows; row++) {
             var pixels = state.bitmap[row];
             if (!pixels || pixels.length === 0) {
                 // Draw unfilled rows as gray
@@ -266,7 +257,7 @@ var RfFaxMode = (function () {
         if (pixelSize >= 4) {
             ctx.strokeStyle = '#e0e0e0';
             ctx.lineWidth = 0.5;
-            for (var gy = 0; gy <= state.expectedLines; gy++) {
+            for (var gy = 0; gy <= numRows; gy++) {
                 ctx.beginPath();
                 ctx.moveTo(0, gy * pixelSize);
                 ctx.lineTo(w, gy * pixelSize);
@@ -309,10 +300,13 @@ var RfFaxMode = (function () {
         var logPanel = document.getElementById('rfFaxLog');
         if (logPanel) logPanel.innerHTML = '';
         state.lineLog = [];
+        state.bitmap = null;
+        state.widthPixels = 0;
+        clearCanvas();
         var countEl = document.getElementById('rfFaxLineCount');
-        if (countEl) countEl.textContent = '0 / ' + state.expectedLines + ' lines';
+        if (countEl) countEl.textContent = '0 lines';
         var barLines = document.getElementById('rfFaxStatusBarLines');
-        if (barLines) barLines.textContent = '0 / ' + state.expectedLines + ' lines';
+        if (barLines) barLines.textContent = '0 lines';
     }
 
     // ---- Export ----

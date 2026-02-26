@@ -146,11 +146,12 @@ class FaxBitmapAssembler:
     def _get_bitmap_unlocked(self) -> list[list[int]] | None:
         if not self._lines:
             return None
+        # Use actual received line range, not a fixed expected count
+        max_line = max(self._lines.keys())
         bitmap: list[list[int]] = []
-        for i in range(self.expected_lines):
+        for i in range(max_line + 1):
             if i in self._lines:
                 row = self._lines[i]
-                # Pad to width if needed
                 if len(row) < self._width_pixels:
                     row = row + [0] * (self._width_pixels - len(row))
                 bitmap.append(row)
@@ -297,24 +298,8 @@ def rf_fax_parser_thread(
                 except queue.Full:
                     pass
 
-                # If image just completed, emit full bitmap
-                if status['complete'] and status['is_new_line']:
-                    bitmap = assembler.get_bitmap()
-                    if bitmap:
-                        try:
-                            output_queue.put_nowait({
-                                'type': 'rf_fax_image',
-                                'bitmap': bitmap,
-                                'width': assembler.width_pixels,
-                                'height': expected_lines,
-                                'image_count': status['image_count'],
-                                'timestamp': timestamp,
-                            })
-                        except queue.Full:
-                            pass
-
-                    # Reset for next image cycle
-                    assembler.reset()
+                # No auto-reset: accumulate all lines for the session duration.
+                # Progressive rendering is driven entirely by rf_fax_line events.
 
     except Exception as e:
         logger.debug(f"RF Fax parser thread error: {e}")

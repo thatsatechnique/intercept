@@ -22,6 +22,8 @@ from utils.validation import (
     validate_frequency,
     validate_gain,
     validate_ppm,
+    validate_rtl_tcp_host,
+    validate_rtl_tcp_port,
 )
 
 morse_bp = Blueprint('morse', __name__)
@@ -95,16 +97,21 @@ def start_morse() -> Response:
         except ValueError as e:
             return jsonify({'status': 'error', 'message': str(e)}), 400
 
-        # Claim SDR device
-        device_int = int(device)
-        error = app_module.claim_sdr_device(device_int, 'morse')
-        if error:
-            return jsonify({
-                'status': 'error',
-                'error_type': 'DEVICE_BUSY',
-                'message': error,
-            }), 409
-        morse_active_device = device_int
+        # Check for rtl_tcp (remote SDR) connection
+        rtl_tcp_host = data.get('rtl_tcp_host') or None
+        rtl_tcp_port = data.get('rtl_tcp_port', 1234)
+
+        # Claim local device only if not using remote rtl_tcp
+        if not rtl_tcp_host:
+            device_int = int(device)
+            error = app_module.claim_sdr_device(device_int, 'morse')
+            if error:
+                return jsonify({
+                    'status': 'error',
+                    'error_type': 'DEVICE_BUSY',
+                    'message': error,
+                }), 409
+            morse_active_device = device_int
 
         # Clear queue
         while not app_module.morse_queue.empty():
@@ -120,7 +127,16 @@ def start_morse() -> Response:
         except ValueError:
             sdr_type = SDRType.RTL_SDR
 
-        sdr_device = SDRFactory.create_default_device(sdr_type, index=device)
+        if rtl_tcp_host:
+            try:
+                rtl_tcp_host = validate_rtl_tcp_host(rtl_tcp_host)
+                rtl_tcp_port = validate_rtl_tcp_port(rtl_tcp_port)
+            except ValueError as e:
+                return jsonify({'status': 'error', 'message': str(e)}), 400
+            sdr_device = SDRFactory.create_network_device(rtl_tcp_host, rtl_tcp_port)
+            logger.info(f"Using remote SDR: rtl_tcp://{rtl_tcp_host}:{rtl_tcp_port}")
+        else:
+            sdr_device = SDRFactory.create_default_device(sdr_type, index=device)
         builder = SDRFactory.get_builder(sdr_device.sdr_type)
 
         # Envelope mode (OOK/AM): use AM demod, higher sample rate for better

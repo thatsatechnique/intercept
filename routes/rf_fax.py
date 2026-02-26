@@ -27,6 +27,8 @@ from utils.validation import (
     validate_frequency,
     validate_gain,
     validate_ppm,
+    validate_rtl_tcp_host,
+    validate_rtl_tcp_port,
 )
 
 rf_fax_bp = Blueprint('rf_fax', __name__)
@@ -54,6 +56,10 @@ def start_rf_fax() -> Response:
         except ValueError as e:
             return jsonify({'status': 'error', 'message': str(e)}), 400
 
+        # Check for rtl_tcp (remote SDR) connection
+        rtl_tcp_host = data.get('rtl_tcp_host') or None
+        rtl_tcp_port = data.get('rtl_tcp_port', 1234)
+
         # OOK PWM timing parameters (defaults match Flag 7 transmitter)
         short_pulse = int(data.get('short_pulse', 300))
         long_pulse = int(data.get('long_pulse', 600))
@@ -63,16 +69,17 @@ def start_rf_fax() -> Response:
         min_bits = int(data.get('min_bits', 64))
         expected_lines = int(data.get('expected_lines', 11))
 
-        # Claim SDR device
-        device_int = int(device)
-        error = app_module.claim_sdr_device(device_int, 'rf_fax')
-        if error:
-            return jsonify({
-                'status': 'error',
-                'error_type': 'DEVICE_BUSY',
-                'message': error,
-            }), 409
-        rf_fax_active_device = device_int
+        # Claim local device only if not using remote rtl_tcp
+        if not rtl_tcp_host:
+            device_int = int(device)
+            error = app_module.claim_sdr_device(device_int, 'rf_fax')
+            if error:
+                return jsonify({
+                    'status': 'error',
+                    'error_type': 'DEVICE_BUSY',
+                    'message': error,
+                }), 409
+            rf_fax_active_device = device_int
 
         # Clear queue
         while not app_module.rf_fax_queue.empty():
@@ -88,7 +95,16 @@ def start_rf_fax() -> Response:
         except ValueError:
             sdr_type = SDRType.RTL_SDR
 
-        sdr_device = SDRFactory.create_default_device(sdr_type, index=device)
+        if rtl_tcp_host:
+            try:
+                rtl_tcp_host = validate_rtl_tcp_host(rtl_tcp_host)
+                rtl_tcp_port = validate_rtl_tcp_port(rtl_tcp_port)
+            except ValueError as e:
+                return jsonify({'status': 'error', 'message': str(e)}), 400
+            sdr_device = SDRFactory.create_network_device(rtl_tcp_host, rtl_tcp_port)
+            logger.info(f"Using remote SDR: rtl_tcp://{rtl_tcp_host}:{rtl_tcp_port}")
+        else:
+            sdr_device = SDRFactory.create_default_device(sdr_type, index=device)
         builder = SDRFactory.get_builder(sdr_device.sdr_type)
 
         bias_t = data.get('bias_t', False)
