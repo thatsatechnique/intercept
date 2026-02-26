@@ -688,6 +688,8 @@
 
                 {% include 'partials/modes/morse.html' %}
 
+                {% include 'partials/modes/rf_fax.html' %}
+
                 {% include 'partials/modes/space-weather.html' %}
 
                 {% include 'partials/modes/tscm.html' %}
@@ -3106,6 +3108,39 @@
                     </div>
                 </div>
 
+                <!-- RF Fax Bitmap Canvas -->
+                <div id="rfFaxCanvasPanel" style="display: none; margin-bottom: 12px;">
+                    <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px;">
+                            <span>Received Bitmap</span>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="btn btn-sm btn-ghost" onclick="RfFaxMode.exportPng()">PNG</button>
+                                <button class="btn btn-sm btn-ghost" onclick="RfFaxMode.clearLog()">Clear</button>
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: center; padding: 8px; background: #111; border-radius: 3px;">
+                            <canvas id="rfFaxCanvas" style="image-rendering: pixelated;"></canvas>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 4px;">
+                            <span id="rfFaxStatusBarLines">0 / 11 lines</span>
+                            <span id="rfFaxStatusBarImages">0 images</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RF Fax Line Log -->
+                <div id="rfFaxLogPanel" style="display: none; margin-bottom: 12px;">
+                    <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px;">
+                            <span>Scan Line Log</span>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="btn btn-sm btn-ghost" onclick="RfFaxMode.exportLog()">CSV</button>
+                            </div>
+                        </div>
+                        <div id="rfFaxLog" style="max-height: 200px; overflow-y: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);"></div>
+                    </div>
+                </div>
+
                 <div class="output-content signal-feed" id="output">
                     <div class="placeholder signal-empty-state">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -3176,6 +3211,7 @@
     <script src="{{ url_for('static', filename='js/modes/bt_locate.js') }}?v={{ version }}&r=btlocate4"></script>
     <script src="{{ url_for('static', filename='js/modes/wefax.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/morse.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modes/rf-fax.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/space-weather.js') }}"></script>
     <script src="{{ url_for('static', filename='js/core/voice-alerts.js') }}?v={{ version }}&r=voicefix2"></script>
     <script src="{{ url_for('static', filename='js/core/keyboard-shortcuts.js') }}"></script>
@@ -3330,6 +3366,7 @@
             websdr: { label: 'WebSDR', indicator: 'WEBSDR', outputTitle: 'HF/Shortwave WebSDR', group: 'intel' },
             waterfall: { label: 'Waterfall', indicator: 'WATERFALL', outputTitle: 'Spectrum Waterfall', group: 'signals' },
             morse: { label: 'Morse', indicator: 'MORSE', outputTitle: 'CW/Morse Decoder', group: 'signals' },
+            rf_fax: { label: 'RF Fax', indicator: 'RF FAX', outputTitle: 'RF Fax / Bitmap Decoder', group: 'signals' },
         };
         const validModes = new Set(Object.keys(modeCatalog));
         window.interceptModeCatalog = Object.assign({}, modeCatalog);
@@ -4089,6 +4126,7 @@
             document.getElementById('spaceWeatherMode')?.classList.toggle('active', mode === 'spaceweather');
             document.getElementById('waterfallMode')?.classList.toggle('active', mode === 'waterfall');
             document.getElementById('morseMode')?.classList.toggle('active', mode === 'morse');
+            document.getElementById('rfFaxMode')?.classList.toggle('active', mode === 'rf_fax');
 
 
             const pagerStats = document.getElementById('pagerStats');
@@ -4172,6 +4210,10 @@
             const morseOutputPanel = document.getElementById('morseOutputPanel');
             if (morseScopePanel && mode !== 'morse') morseScopePanel.style.display = 'none';
             if (morseOutputPanel && mode !== 'morse') morseOutputPanel.style.display = 'none';
+            const rfFaxCanvasPanel = document.getElementById('rfFaxCanvasPanel');
+            const rfFaxLogPanel = document.getElementById('rfFaxLogPanel');
+            if (rfFaxCanvasPanel && mode !== 'rf_fax') rfFaxCanvasPanel.style.display = 'none';
+            if (rfFaxLogPanel && mode !== 'rf_fax') rfFaxLogPanel.style.display = 'none';
 
             // Update output panel title based on mode
             const outputTitle = document.getElementById('outputTitle');
@@ -4331,6 +4373,8 @@
                 if (typeof Waterfall !== 'undefined') Waterfall.init();
             } else if (mode === 'morse') {
                 MorseMode.init();
+            } else if (mode === 'rf_fax') {
+                RfFaxMode.init();
             }
 
             // Destroy Waterfall WebSocket when leaving SDR receiver modes

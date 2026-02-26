@@ -17,6 +17,7 @@ def register_blueprints(app):
     from .listening_post import receiver_bp
     from .meshtastic import meshtastic_bp
     from .morse import morse_bp
+    from .rf_fax import rf_fax_bp
     from .offline import offline_bp
     from .pager import pager_bp
     from .recordings import recordings_bp
@@ -75,6 +76,7 @@ def register_blueprints(app):
     app.register_blueprint(signalid_bp)  # External signal ID enrichment
     app.register_blueprint(wefax_bp)  # WeFax HF weather fax decoder
     app.register_blueprint(morse_bp)  # CW/Morse code decoder
+    app.register_blueprint(rf_fax_bp)  # RF Fax / OOK bitmap decoder
 
     # Initialize TSCM state with queue and lock from app
     import app as app_module

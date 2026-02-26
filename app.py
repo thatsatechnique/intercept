@@ -203,6 +203,11 @@ morse_process = None
 morse_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
 morse_lock = threading.Lock()
 
+# RF Fax / OOK bitmap decoder
+rf_fax_process = None
+rf_fax_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
+rf_fax_lock = threading.Lock()
+
 # Deauth Attack Detection
 deauth_detector = None
 deauth_detector_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
@@ -761,6 +766,7 @@ def health_check() -> Response:
             'bluetooth': bt_active,
             'dsc': dsc_process is not None and (dsc_process.poll() is None if dsc_process else False),
             'morse': morse_process is not None and (morse_process.poll() is None if morse_process else False),
+            'rf_fax': rf_fax_process is not None and (rf_fax_process.poll() is None if rf_fax_process else False),
             'subghz': _get_subghz_active(),
         },
         'data': {
@@ -778,7 +784,7 @@ def health_check() -> Response:
 def kill_all() -> Response:
     """Kill all decoder, WiFi, and Bluetooth processes."""
     global current_process, sensor_process, wifi_process, adsb_process, ais_process, acars_process
-    global vdl2_process, morse_process
+    global vdl2_process, morse_process, rf_fax_process
     global aprs_process, aprs_rtl_process, dsc_process, dsc_rtl_process, bt_process
 
     # Import adsb and ais modules to reset their state
@@ -834,6 +840,9 @@ def kill_all() -> Response:
     # Reset Morse state
     with morse_lock:
         morse_process = None
+
+    with rf_fax_lock:
+        rf_fax_process = None
 
     # Reset APRS state
     with aprs_lock:
