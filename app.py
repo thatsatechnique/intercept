@@ -29,7 +29,7 @@ from flask import Flask, render_template, jsonify, send_file, Response, request,
 from werkzeug.security import check_password_hash
 from config import VERSION, CHANGELOG, SHARED_OBSERVER_LOCATION_ENABLED, DEFAULT_LATITUDE, DEFAULT_LONGITUDE
 from utils.dependencies import check_tool, check_all_dependencies, TOOL_DEPENDENCIES
-from utils.process import cleanup_stale_processes, cleanup_stale_dump1090
+from utils.process import cleanup_stale_processes, cleanup_stale_dump1090, safe_terminate, unregister_process
 from utils.sdr import SDRFactory
 from utils.cleanup import DataStore, cleanup_manager
 from utils.constants import (
@@ -207,6 +207,11 @@ radiosonde_lock = threading.Lock()
 morse_process = None
 morse_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
 morse_lock = threading.Lock()
+
+# RF Fax / OOK bitmap decoder
+rf_fax_process = None
+rf_fax_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
+rf_fax_lock = threading.Lock()
 
 # Deauth Attack Detection
 deauth_detector = None
@@ -790,7 +795,7 @@ def health_check() -> Response:
 def kill_all() -> Response:
     """Kill all decoder, WiFi, and Bluetooth processes."""
     global current_process, sensor_process, wifi_process, adsb_process, ais_process, acars_process
-    global vdl2_process, morse_process, radiosonde_process
+    global vdl2_process, morse_process, rf_fax_process, radiosonde_process
     global aprs_process, aprs_rtl_process, dsc_process, dsc_rtl_process, bt_process
 
     # Import modules to reset their state
@@ -853,6 +858,16 @@ def kill_all() -> Response:
     # Reset Morse state
     with morse_lock:
         morse_process = None
+
+    # Reset RF Fax state
+    with rf_fax_lock:
+        if rf_fax_process is not None:
+            stop_event = getattr(rf_fax_process, '_stop_parser', None)
+            if stop_event:
+                stop_event.set()
+            safe_terminate(rf_fax_process)
+            unregister_process(rf_fax_process)
+        rf_fax_process = None
 
     # Reset APRS state
     with aprs_lock:

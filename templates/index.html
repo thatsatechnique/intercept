@@ -83,6 +83,7 @@
             spaceweather: "{{ url_for('static', filename='css/modes/space-weather.css') }}",
             wefax: "{{ url_for('static', filename='css/modes/wefax.css') }}",
             morse: "{{ url_for('static', filename='css/modes/morse.css') }}",
+            rf_fax: "{{ url_for('static', filename='css/modes/rf_fax.css') }}",
             radiosonde: "{{ url_for('static', filename='css/modes/radiosonde.css') }}",
             system: "{{ url_for('static', filename='css/modes/system.css') }}"
         };
@@ -284,6 +285,10 @@
                             <button class="mode-card mode-card-sm" onclick="selectMode('morse')">
                                 <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="12" x2="5" y2="12"/><line x1="7" y1="12" x2="13" y2="12"/><line x1="15" y1="12" x2="18" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/></svg></span>
                                 <span class="mode-name">Morse</span>
+                            </button>
+                            <button class="mode-card mode-card-sm" onclick="selectMode('rf_fax')">
+                                <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg></span>
+                                <span class="mode-name">RF Fax</span>
                             </button>
                         </div>
                     </div>
@@ -694,6 +699,8 @@
                 {% include 'partials/modes/wefax.html' %}
 
                 {% include 'partials/modes/morse.html' %}
+
+                {% include 'partials/modes/rf_fax.html' %}
 
                 {% include 'partials/modes/space-weather.html' %}
 
@@ -3134,6 +3141,36 @@
                     </div>
                 </div>
 
+                <!-- RF Fax Bitmap Canvas -->
+                <div id="rfFaxCanvasPanel" class="rf-fax-canvas-panel" style="display: none; margin-bottom: 12px;">
+                    <div class="rf-fax-canvas-header">
+                        <span>RF Fax Bitmap</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-sm btn-ghost" onclick="RfFaxMode.exportPng()">PNG</button>
+                            <button class="btn btn-sm btn-ghost" onclick="RfFaxMode.tearPage()">Tear</button>
+                        </div>
+                    </div>
+                    <div class="rf-fax-canvas-wrap">
+                        <canvas id="rfFaxCanvas"></canvas>
+                    </div>
+                    <div class="rf-fax-status-bar">
+                        <span id="rfFaxCanvasStatus">No data</span>
+                        <span id="rfFaxCanvasDims">--</span>
+                    </div>
+                </div>
+
+                <!-- RF Fax Line Log -->
+                <div id="rfFaxLogPanel" class="rf-fax-log-panel" style="display: none; margin-bottom: 12px;">
+                    <div class="rf-fax-log-header">
+                        <span>Line Log</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-sm btn-ghost" onclick="RfFaxMode.exportLog()">Export</button>
+                            <button class="btn btn-sm btn-ghost" onclick="RfFaxMode.clearLog()">Clear</button>
+                        </div>
+                    </div>
+                    <div id="rfFaxLogContent" class="rf-fax-log-content"></div>
+                </div>
+
                 <!-- Radiosonde Visuals -->
                 <div id="radiosondeVisuals" class="radiosonde-visuals-container" style="display: none;">
                     <div id="radiosondeMapContainer" style="flex: 1; min-height: 300px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-primary);"></div>
@@ -3260,6 +3297,7 @@
     <script src="{{ url_for('static', filename='js/modes/bt_locate.js') }}?v={{ version }}&r=btlocate4"></script>
     <script src="{{ url_for('static', filename='js/modes/wefax.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/morse.js') }}?v={{ version }}&r=morse_iq12"></script>
+    <script src="{{ url_for('static', filename='js/modes/rf-fax.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/space-weather.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/system.js') }}"></script>
     <script src="{{ url_for('static', filename='js/core/voice-alerts.js') }}?v={{ version }}&r=voicefix2"></script>
@@ -3416,6 +3454,7 @@
             websdr: { label: 'WebSDR', indicator: 'WEBSDR', outputTitle: 'HF/Shortwave WebSDR', group: 'intel' },
             waterfall: { label: 'Waterfall', indicator: 'WATERFALL', outputTitle: 'Spectrum Waterfall', group: 'signals' },
             morse: { label: 'Morse', indicator: 'MORSE', outputTitle: 'CW/Morse Decoder', group: 'signals' },
+            rf_fax: { label: 'RF Fax', indicator: 'RF FAX', outputTitle: 'RF Fax / Bitmap Decoder', group: 'signals' },
             system: { label: 'System', indicator: 'SYSTEM', outputTitle: 'System Health Monitor', group: 'system' },
         };
         const validModes = new Set(Object.keys(modeCatalog));
@@ -4147,6 +4186,9 @@
             if (typeof MorseMode !== 'undefined' && currentMode === 'morse' && mode !== 'morse' && typeof MorseMode.destroy === 'function') {
                 MorseMode.destroy();
             }
+            if (typeof RfFaxMode !== 'undefined' && currentMode === 'rf_fax' && mode !== 'rf_fax' && typeof RfFaxMode.destroy === 'function') {
+                RfFaxMode.destroy();
+            }
 
             currentMode = mode;
             document.body.setAttribute('data-mode', mode);
@@ -4197,6 +4239,7 @@
             document.getElementById('spaceWeatherMode')?.classList.toggle('active', mode === 'spaceweather');
             document.getElementById('waterfallMode')?.classList.toggle('active', mode === 'waterfall');
             document.getElementById('morseMode')?.classList.toggle('active', mode === 'morse');
+            document.getElementById('rfFaxMode')?.classList.toggle('active', mode === 'rf_fax');
             document.getElementById('systemMode')?.classList.toggle('active', mode === 'system');
 
 
@@ -4287,6 +4330,10 @@
             if (morseOutputPanel && mode !== 'morse') morseOutputPanel.style.display = 'none';
             const morseDiagLog = document.getElementById('morseDiagLog');
             if (morseDiagLog && mode !== 'morse') morseDiagLog.style.display = 'none';
+            const rfFaxCanvasPanel = document.getElementById('rfFaxCanvasPanel');
+            const rfFaxLogPanel = document.getElementById('rfFaxLogPanel');
+            if (rfFaxCanvasPanel && mode !== 'rf_fax') rfFaxCanvasPanel.style.display = 'none';
+            if (rfFaxLogPanel && mode !== 'rf_fax') rfFaxLogPanel.style.display = 'none';
 
             // Update output panel title based on mode
             const outputTitle = document.getElementById('outputTitle');
@@ -4346,19 +4393,23 @@
             // Show RTL-SDR device section for modes that use it
             const rtlDeviceSection = document.getElementById('rtlDeviceSection');
             if (rtlDeviceSection) {
-                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse' || mode === 'radiosonde') ? 'block' : 'none';
+                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse' || mode === 'rf_fax' || mode === 'radiosonde') ? 'block' : 'none';
                 // Save original sidebar position of SDR device section (once)
                 if (!rtlDeviceSection._origParent) {
                     rtlDeviceSection._origParent = rtlDeviceSection.parentNode;
                     rtlDeviceSection._origNext = rtlDeviceSection.nextElementSibling;
                 }
-                // For morse mode, move SDR device section inside the morse panel after the title
+                // For morse/rf_fax mode, move SDR device section inside the panel after the title
                 const morsePanel = document.getElementById('morseMode');
+                const rfFaxPanel = document.getElementById('rfFaxMode');
                 if (mode === 'morse' && morsePanel) {
                     const firstSection = morsePanel.querySelector('.section');
                     if (firstSection) firstSection.after(rtlDeviceSection);
+                } else if (mode === 'rf_fax' && rfFaxPanel) {
+                    const firstSection = rfFaxPanel.querySelector('.section');
+                    if (firstSection) firstSection.after(rtlDeviceSection);
                 } else if (rtlDeviceSection._origParent && rtlDeviceSection.parentNode !== rtlDeviceSection._origParent) {
-                    // Restore to original sidebar position when leaving morse mode
+                    // Restore to original sidebar position when leaving morse/rf_fax mode
                     if (rtlDeviceSection._origNext) {
                         rtlDeviceSection._origNext.before(rtlDeviceSection);
                     } else {
@@ -4376,8 +4427,8 @@
             // Hide output console for modes with their own visualizations
             const outputEl = document.getElementById('output');
             const statusBar = document.querySelector('.status-bar');
-            if (outputEl) outputEl.style.display = (mode === 'satellite' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'aprs' || mode === 'wifi' || mode === 'bluetooth' || mode === 'tscm' || mode === 'spystations' || mode === 'meshtastic' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'bt_locate' || mode === 'waterfall' || mode === 'morse' || mode === 'system') ? 'none' : 'block';
-            if (statusBar) statusBar.style.display = (mode === 'satellite' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'waterfall' || mode === 'morse' || mode === 'system') ? 'none' : 'flex';
+            if (outputEl) outputEl.style.display = (mode === 'satellite' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'aprs' || mode === 'wifi' || mode === 'bluetooth' || mode === 'tscm' || mode === 'spystations' || mode === 'meshtastic' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'bt_locate' || mode === 'waterfall' || mode === 'morse' || mode === 'rf_fax' || mode === 'system') ? 'none' : 'block';
+            if (statusBar) statusBar.style.display = (mode === 'satellite' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'waterfall' || mode === 'morse' || mode === 'rf_fax' || mode === 'system') ? 'none' : 'flex';
 
             // Restore sidebar when leaving Meshtastic mode (user may have collapsed it)
             if (mode !== 'meshtastic') {
@@ -4451,6 +4502,8 @@
                 if (typeof Waterfall !== 'undefined') Waterfall.init();
             } else if (mode === 'morse') {
                 MorseMode.init();
+            } else if (mode === 'rf_fax') {
+                RfFaxMode.init();
             } else if (mode === 'radiosonde') {
                 initRadiosondeMap();
                 setTimeout(() => {

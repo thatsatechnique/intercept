@@ -1,0 +1,87 @@
+<!-- RF FAX / OOK BITMAP MODE -->
+<div id="rfFaxMode" class="mode-content">
+    <div class="section">
+        <h3>RF Fax / Bitmap Decoder</h3>
+        <p class="info-text">
+            Decode OOK PWM bitmap transmissions. Captures scan lines via rtl_433 flex decoder
+            and reconstructs the transmitted image in real time.
+        </p>
+    </div>
+
+    <div class="section">
+        <h3>Frequency</h3>
+        <div class="form-group">
+            <label>Frequency (MHz)</label>
+            <input type="number" id="rfFaxFrequency" value="433.400" step="0.001" min="1" max="1766">
+        </div>
+        <div class="form-group">
+            <label>Presets</label>
+            <div class="rf-fax-presets">
+                <button class="preset-btn" onclick="RfFaxMode.setFreq(433.400)">433.4</button>
+                <button class="preset-btn" onclick="RfFaxMode.setFreq(433.920)">433.9</button>
+                <button class="preset-btn" onclick="RfFaxMode.setFreq(315.000)">315</button>
+                <button class="preset-btn" onclick="RfFaxMode.setFreq(868.000)">868</button>
+                <button class="preset-btn" onclick="RfFaxMode.setFreq(915.000)">915</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>SDR Settings</h3>
+        <div class="form-group">
+            <label>Gain (dB)</label>
+            <input type="number" id="rfFaxGain" value="40" step="1" min="0" max="50">
+        </div>
+        <div class="form-group">
+            <label>PPM Correction</label>
+            <input type="number" id="rfFaxPPM" value="0" step="1" min="-100" max="100">
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>OOK PWM Timing</h3>
+        <p class="info-text" style="font-size: 10px; margin-bottom: 8px;">
+            Pulse widths for the flex decoder. Defaults match standard OOK PWM fax signals.
+        </p>
+        <div class="rf-fax-timing-grid">
+            <div class="form-group">
+                <label>Short pulse (&mu;s)</label>
+                <input type="number" id="rfFaxShortPulse" value="300" step="10" min="50" max="2000">
+            </div>
+            <div class="form-group">
+                <label>Long pulse (&mu;s)</label>
+                <input type="number" id="rfFaxLongPulse" value="600" step="10" min="100" max="4000">
+            </div>
+        </div>
+        <div class="form-group" style="margin-top: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="rfFaxWaterfall" style="width: auto; margin: 0;">
+                <span>Waterfall mode</span>
+            </label>
+            <p class="info-text" style="font-size: 10px; margin-top: 4px;">
+                Ignore frame line numbers &mdash; append every received frame as a new row.
+                Use for unknown protocols or signals without stable row indices.
+            </p>
+        </div>
+    </div>
+
+    <!-- Status -->
+    <div class="section">
+        <div class="rf-fax-status-row">
+            <span id="rfFaxStatusIndicator" class="status-dot"></span>
+            <span id="rfFaxStatusText">Standby</span>
+            <span style="margin-left: auto;" id="rfFaxLineCount">0 lines</span>
+        </div>
+    </div>
+
+    <div class="section">
+        <p class="info-text" style="font-size: 11px; color: #ffaa00; line-height: 1.5;">
+            Uses rtl_433 with a custom OOK PWM flex decoder. Requires rtl_433 installed.
+            Each scan line is a separate OOK frame with sync (A5 5A), line number,
+            pixel data, and CRC8.
+        </p>
+    </div>
+
+    <button class="run-btn" id="rfFaxStartBtn" onclick="RfFaxMode.start()">Start Decoder</button>
+    <button class="stop-btn" id="rfFaxStopBtn" onclick="RfFaxMode.stop()" style="display: none;">Stop Decoder</button>
+</div>
