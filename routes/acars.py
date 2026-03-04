@@ -6,37 +6,41 @@ import io
 import json
 import os
 import platform
-import pty
 import queue
 import shutil
 import subprocess
 import threading
 import time
 from datetime import datetime
-from typing import Generator
+from typing import Any, Generator
 
-from flask import Blueprint, jsonify, request, Response
+from flask import Blueprint, Response, jsonify, request
 
 import app as app_module
-from utils.logging import sensor_logger as logger
-from utils.validation import validate_device_index, validate_gain, validate_ppm
-from utils.sdr import SDRFactory, SDRType
-from utils.sse import sse_stream_fanout
-from utils.event_pipeline import process_event
+from utils.acars_translator import translate_message
 from utils.constants import (
+    PROCESS_START_WAIT,
     PROCESS_TERMINATE_TIMEOUT,
     SSE_KEEPALIVE_INTERVAL,
     SSE_QUEUE_TIMEOUT,
-    PROCESS_START_WAIT,
 )
+from utils.event_pipeline import process_event
+from utils.flight_correlator import get_flight_correlator
+from utils.logging import sensor_logger as logger
 from utils.process import register_process, unregister_process
+from utils.sdr import SDRFactory, SDRType
+from utils.sse import sse_stream_fanout
+from utils.validation import validate_device_index, validate_gain, validate_ppm
 
 acars_bp = Blueprint('acars', __name__, url_prefix='/acars')
 
-# Default VHF ACARS frequencies (MHz) - common worldwide
+# Default VHF ACARS frequencies (MHz) - North America primary
 DEFAULT_ACARS_FREQUENCIES = [
-    '131.725',  # North America
-    '131.825',  # North America
+    '131.550',  # Primary worldwide / North America
+    '130.025',  # North America secondary
+    '129.125',  # North America tertiary
+    '131.725',  # North America (major US carriers)
+    '131.825',  # North America (major US carriers)
 ]
 
 # Message counter for statistics
@@ -45,6 +49,7 @@ acars_last_message_time = None
 
 # Track which device is being used
 acars_active_device: int | None = None
+acars_active_sdr_type: str | None = None
 
 
 def find_acarsdec():
@@ -120,6 +125,15 @@ def stream_acars_output(process: subprocess.Popen, is_text_mode: bool = False) -
                 data['type'] = 'acars'
                 data['timestamp'] = datetime.utcnow().isoformat() + 'Z'
 
+                # Enrich with translated label and parsed fields
+                try:
+                    translation = translate_message(data)
+                    data['label_description'] = translation['label_description']
+                    data['message_type'] = translation['message_type']
+                    data['parsed'] = translation['parsed']
+                except Exception:
+                    pass
+
                 # Update stats
                 acars_message_count += 1
                 acars_last_message_time = time.time()
@@ -128,7 +142,6 @@ def stream_acars_output(process: subprocess.Popen, is_text_mode: bool = False) -
 
                 # Feed flight correlator
                 try:
-                    from utils.flight_correlator import get_flight_correlator
                     get_flight_correlator().add_acars_message(data)
                 except Exception:
                     pass
@@ -151,7 +164,7 @@ def stream_acars_output(process: subprocess.Popen, is_text_mode: bool = False) -
         logger.error(f"ACARS stream error: {e}")
         app_module.acars_queue.put({'type': 'error', 'message': str(e)})
     finally:
-        global acars_active_device
+        global acars_active_device, acars_active_sdr_type
         # Ensure process is terminated
         try:
             process.terminate()
@@ -167,8 +180,9 @@ def stream_acars_output(process: subprocess.Popen, is_text_mode: bool = False) -
             app_module.acars_process = None
         # Release SDR device
         if acars_active_device is not None:
-            app_module.release_sdr_device(acars_active_device)
+            app_module.release_sdr_device(acars_active_device, acars_active_sdr_type or 'rtlsdr')
             acars_active_device = None
+            acars_active_sdr_type = None
 
 
 @acars_bp.route('/tools')
@@ -200,7 +214,7 @@ def acars_status() -> Response:
 @acars_bp.route('/start', methods=['POST'])
 def start_acars() -> Response:
     """Start ACARS decoder."""
-    global acars_message_count, acars_last_message_time, acars_active_device
+    global acars_message_count, acars_last_message_time, acars_active_device, acars_active_sdr_type
 
     with app_module.acars_lock:
         if app_module.acars_process and app_module.acars_process.poll() is None:
@@ -227,9 +241,12 @@ def start_acars() -> Response:
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
 
+    # Resolve SDR type for device selection
+    sdr_type_str = data.get('sdr_type', 'rtlsdr')
+
     # Check if device is available
     device_int = int(device)
-    error = app_module.claim_sdr_device(device_int, 'acars')
+    error = app_module.claim_sdr_device(device_int, 'acars', sdr_type_str)
     if error:
         return jsonify({
             'status': 'error',
@@ -238,6 +255,7 @@ def start_acars() -> Response:
         }), 409
 
     acars_active_device = device_int
+    acars_active_sdr_type = sdr_type_str
 
     # Get frequencies - use provided or defaults
     frequencies = data.get('frequencies', DEFAULT_ACARS_FREQUENCIES)
@@ -255,8 +273,6 @@ def start_acars() -> Response:
     acars_message_count = 0
     acars_last_message_time = None
 
-    # Resolve SDR type for device selection
-    sdr_type_str = data.get('sdr_type', 'rtlsdr')
     try:
         sdr_type = SDRType(sdr_type_str)
     except ValueError:
@@ -318,6 +334,7 @@ def start_acars() -> Response:
 
         # On macOS, use pty to avoid stdout buffering issues
         if platform.system() == 'Darwin':
+            import pty
             master_fd, slave_fd = pty.openpty()
             process = subprocess.Popen(
                 cmd,
@@ -343,14 +360,17 @@ def start_acars() -> Response:
         if process.poll() is not None:
             # Process died - release device
             if acars_active_device is not None:
-                app_module.release_sdr_device(acars_active_device)
+                app_module.release_sdr_device(acars_active_device, acars_active_sdr_type or 'rtlsdr')
                 acars_active_device = None
+                acars_active_sdr_type = None
             stderr = ''
             if process.stderr:
                 stderr = process.stderr.read().decode('utf-8', errors='replace')
-            error_msg = f'acarsdec failed to start'
             if stderr:
-                error_msg += f': {stderr[:200]}'
+                logger.error(f"acarsdec stderr:\n{stderr}")
+            error_msg = 'acarsdec failed to start'
+            if stderr:
+                error_msg += f': {stderr[:500]}'
             logger.error(error_msg)
             return jsonify({'status': 'error', 'message': error_msg}), 500
 
@@ -375,8 +395,9 @@ def start_acars() -> Response:
     except Exception as e:
         # Release device on failure
         if acars_active_device is not None:
-            app_module.release_sdr_device(acars_active_device)
+            app_module.release_sdr_device(acars_active_device, acars_active_sdr_type or 'rtlsdr')
             acars_active_device = None
+            acars_active_sdr_type = None
         logger.error(f"Failed to start ACARS decoder: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -384,7 +405,7 @@ def start_acars() -> Response:
 @acars_bp.route('/stop', methods=['POST'])
 def stop_acars() -> Response:
     """Stop ACARS decoder."""
-    global acars_active_device
+    global acars_active_device, acars_active_sdr_type
 
     with app_module.acars_lock:
         if not app_module.acars_process:
@@ -405,8 +426,9 @@ def stop_acars() -> Response:
 
     # Release device from registry
     if acars_active_device is not None:
-        app_module.release_sdr_device(acars_active_device)
+        app_module.release_sdr_device(acars_active_device, acars_active_sdr_type or 'rtlsdr')
         acars_active_device = None
+        acars_active_sdr_type = None
 
     return jsonify({'status': 'stopped'})
 
@@ -432,13 +454,32 @@ def stream_acars() -> Response:
     return response
 
 
+@acars_bp.route('/messages')
+def get_acars_messages() -> Response:
+    """Get recent ACARS messages from correlator (for history reload)."""
+    limit = request.args.get('limit', 50, type=int)
+    limit = max(1, min(limit, 200))
+    msgs = get_flight_correlator().get_recent_messages('acars', limit)
+    return jsonify(msgs)
+
+
+@acars_bp.route('/clear', methods=['POST'])
+def clear_acars_messages() -> Response:
+    """Clear stored ACARS messages and reset counter."""
+    global acars_message_count, acars_last_message_time
+    get_flight_correlator().clear_acars()
+    acars_message_count = 0
+    acars_last_message_time = None
+    return jsonify({'status': 'cleared'})
+
+
 @acars_bp.route('/frequencies')
 def get_frequencies() -> Response:
     """Get default ACARS frequencies."""
     return jsonify({
         'default': DEFAULT_ACARS_FREQUENCIES,
         'regions': {
-            'north_america': ['131.725', '131.825'],
+            'north_america': ['131.550', '130.025', '129.125', '131.725', '131.825'],
             'europe': ['131.525', '131.725', '131.550'],
             'asia_pacific': ['131.550', '131.450'],
         }

@@ -16,11 +16,13 @@ def register_blueprints(app):
     from .gps import gps_bp
     from .listening_post import receiver_bp
     from .meshtastic import meshtastic_bp
+    from .meteor_websocket import meteor_bp
     from .morse import morse_bp
     from .ook import ook_bp
     from .rf_fax import rf_fax_bp
     from .offline import offline_bp
     from .pager import pager_bp
+    from .radiosonde import radiosonde_bp
     from .recordings import recordings_bp
     from .rtlamr import rtlamr_bp
     from .satellite import satellite_bp
@@ -32,6 +34,7 @@ def register_blueprints(app):
     from .sstv import sstv_bp
     from .sstv_general import sstv_general_bp
     from .subghz import subghz_bp
+    from .system import system_bp
     from .tscm import init_tscm_state, tscm_bp
     from .updater import updater_bp
     from .vdl2 import vdl2_bp
@@ -76,9 +79,12 @@ def register_blueprints(app):
     app.register_blueprint(space_weather_bp)  # Space weather monitoring
     app.register_blueprint(signalid_bp)  # External signal ID enrichment
     app.register_blueprint(wefax_bp)  # WeFax HF weather fax decoder
+    app.register_blueprint(meteor_bp)  # Meteor scatter detection
     app.register_blueprint(morse_bp)  # CW/Morse code decoder
     app.register_blueprint(ook_bp)  # Generic OOK signal decoder
     app.register_blueprint(rf_fax_bp)  # RF Fax / OOK bitmap decoder
+    app.register_blueprint(radiosonde_bp)  # Radiosonde weather balloon tracking
+    app.register_blueprint(system_bp)  # System health monitoring
 
     # Initialize TSCM state with queue and lock from app
     import app as app_module

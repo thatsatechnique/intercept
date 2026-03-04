@@ -45,7 +45,11 @@ def decode_ook_frame(hex_data: str) -> dict[str, Any] | None:
         ``byte_count``, and ``bit_count``, or ``None`` on parse failure.
     """
     try:
-        raw = bytes.fromhex(hex_data.replace(' ', ''))
+        cleaned = hex_data.replace(' ', '')
+        # rtl_433 flex decoder prefixes hex with '0x' — strip it
+        if cleaned.startswith(('0x', '0X')):
+            cleaned = cleaned[2:]
+        raw = bytes.fromhex(cleaned)
     except ValueError:
         return None
 

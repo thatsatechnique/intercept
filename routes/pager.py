@@ -6,7 +6,6 @@ import math
 import os
 import pathlib
 import re
-import pty
 import queue
 import select
 import struct
@@ -34,6 +33,7 @@ pager_bp = Blueprint('pager', __name__)
 
 # Track which device is being used
 pager_active_device: int | None = None
+pager_active_sdr_type: str | None = None
 
 
 def parse_multimon_output(line: str) -> dict[str, str] | None:
@@ -52,6 +52,20 @@ def parse_multimon_output(line: str) -> dict[str, str] | None:
             'function': pocsag_match.group(3),
             'msg_type': pocsag_match.group(4),
             'message': pocsag_match.group(5).strip() or '[No Message]'
+        }
+
+    # POCSAG parsing - other content types (catch-all for non-Alpha/Numeric labels)
+    pocsag_other_match = re.match(
+        r'(POCSAG\d+):\s*Address:\s*(\d+)\s+Function:\s*(\d+)\s+(\w+):\s*(.*)',
+        line
+    )
+    if pocsag_other_match:
+        return {
+            'protocol': pocsag_other_match.group(1),
+            'address': pocsag_other_match.group(2),
+            'function': pocsag_other_match.group(3),
+            'msg_type': pocsag_other_match.group(4),
+            'message': pocsag_other_match.group(5).strip() or '[No Message]'
         }
 
     # POCSAG parsing - address only (no message content)
@@ -220,7 +234,7 @@ def stream_decoder(master_fd: int, process: subprocess.Popen[bytes]) -> None:
     except Exception as e:
         app_module.output_queue.put({'type': 'error', 'text': str(e)})
     finally:
-        global pager_active_device
+        global pager_active_device, pager_active_sdr_type
         try:
             os.close(master_fd)
         except OSError:
@@ -249,13 +263,14 @@ def stream_decoder(master_fd: int, process: subprocess.Popen[bytes]) -> None:
             app_module.current_process = None
         # Release SDR device
         if pager_active_device is not None:
-            app_module.release_sdr_device(pager_active_device)
+            app_module.release_sdr_device(pager_active_device, pager_active_sdr_type or 'rtlsdr')
             pager_active_device = None
+            pager_active_sdr_type = None
 
 
 @pager_bp.route('/start', methods=['POST'])
 def start_decoding() -> Response:
-    global pager_active_device
+    global pager_active_device, pager_active_sdr_type
 
     with app_module.process_lock:
         if app_module.current_process:
@@ -284,10 +299,13 @@ def start_decoding() -> Response:
         rtl_tcp_host = data.get('rtl_tcp_host')
         rtl_tcp_port = data.get('rtl_tcp_port', 1234)
 
+        # Get SDR type early so we can pass it to claim/release
+        sdr_type_str = data.get('sdr_type', 'rtlsdr')
+
         # Claim local device if not using remote rtl_tcp
         if not rtl_tcp_host:
             device_int = int(device)
-            error = app_module.claim_sdr_device(device_int, 'pager')
+            error = app_module.claim_sdr_device(device_int, 'pager', sdr_type_str)
             if error:
                 return jsonify({
                     'status': 'error',
@@ -295,14 +313,16 @@ def start_decoding() -> Response:
                     'message': error
                 }), 409
             pager_active_device = device_int
+            pager_active_sdr_type = sdr_type_str
 
         # Validate protocols
         valid_protocols = ['POCSAG512', 'POCSAG1200', 'POCSAG2400', 'FLEX']
         protocols = data.get('protocols', valid_protocols)
         if not isinstance(protocols, list):
             if pager_active_device is not None:
-                app_module.release_sdr_device(pager_active_device)
+                app_module.release_sdr_device(pager_active_device, pager_active_sdr_type or 'rtlsdr')
                 pager_active_device = None
+                pager_active_sdr_type = None
             return jsonify({'status': 'error', 'message': 'Protocols must be a list'}), 400
         protocols = [p for p in protocols if p in valid_protocols]
         if not protocols:
@@ -327,8 +347,7 @@ def start_decoding() -> Response:
             elif proto == 'FLEX':
                 decoders.extend(['-a', 'FLEX'])
 
-        # Get SDR type and build command via abstraction layer
-        sdr_type_str = data.get('sdr_type', 'rtlsdr')
+        # Build command via SDR abstraction layer
         try:
             sdr_type = SDRType(sdr_type_str)
         except ValueError:
@@ -393,6 +412,7 @@ def start_decoding() -> Response:
             rtl_stderr_thread.start()
 
             # Create a pseudo-terminal for multimon-ng output
+            import pty
             master_fd, slave_fd = pty.openpty()
 
             multimon_process = subprocess.Popen(
@@ -443,8 +463,9 @@ def start_decoding() -> Response:
                     pass
             # Release device on failure
             if pager_active_device is not None:
-                app_module.release_sdr_device(pager_active_device)
+                app_module.release_sdr_device(pager_active_device, pager_active_sdr_type or 'rtlsdr')
                 pager_active_device = None
+                pager_active_sdr_type = None
             return jsonify({'status': 'error', 'message': f'Tool not found: {e.filename}'})
         except Exception as e:
             # Kill orphaned rtl_fm process if it was started
@@ -458,14 +479,15 @@ def start_decoding() -> Response:
                     pass
             # Release device on failure
             if pager_active_device is not None:
-                app_module.release_sdr_device(pager_active_device)
+                app_module.release_sdr_device(pager_active_device, pager_active_sdr_type or 'rtlsdr')
                 pager_active_device = None
+                pager_active_sdr_type = None
             return jsonify({'status': 'error', 'message': str(e)})
 
 
 @pager_bp.route('/stop', methods=['POST'])
 def stop_decoding() -> Response:
-    global pager_active_device
+    global pager_active_device, pager_active_sdr_type
 
     with app_module.process_lock:
         if app_module.current_process:
@@ -502,8 +524,9 @@ def stop_decoding() -> Response:
 
             # Release device from registry
             if pager_active_device is not None:
-                app_module.release_sdr_device(pager_active_device)
+                app_module.release_sdr_device(pager_active_device, pager_active_sdr_type or 'rtlsdr')
                 pager_active_device = None
+                pager_active_sdr_type = None
 
             return jsonify({'status': 'stopped'})
 

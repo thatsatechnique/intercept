@@ -367,6 +367,7 @@ def init_waterfall_websocket(app: Flask):
         reader_thread = None
         stop_event = threading.Event()
         claimed_device = None
+        claimed_sdr_type = 'rtlsdr'
         my_generation = None  # tracks which capture generation this handler owns
         capture_center_mhz = 0.0
         capture_start_freq = 0.0
@@ -430,8 +431,9 @@ def init_waterfall_websocket(app: Flask):
                         unregister_process(iq_process)
                         iq_process = None
                     if claimed_device is not None:
-                        app_module.release_sdr_device(claimed_device)
+                        app_module.release_sdr_device(claimed_device, claimed_sdr_type)
                         claimed_device = None
+                        claimed_sdr_type = 'rtlsdr'
                     _set_shared_capture_state(running=False, generation=my_generation)
                     my_generation = None
                     stop_event.clear()
@@ -513,7 +515,7 @@ def init_waterfall_websocket(app: Flask):
                     max_claim_attempts = 4 if was_restarting else 1
                     claim_err = None
                     for _claim_attempt in range(max_claim_attempts):
-                        claim_err = app_module.claim_sdr_device(device_index, 'waterfall')
+                        claim_err = app_module.claim_sdr_device(device_index, 'waterfall', sdr_type_str)
                         if not claim_err:
                             break
                         if _claim_attempt < max_claim_attempts - 1:
@@ -526,6 +528,7 @@ def init_waterfall_websocket(app: Flask):
                         }))
                         continue
                     claimed_device = device_index
+                    claimed_sdr_type = sdr_type_str
 
                     # Build I/Q capture command
                     try:
@@ -539,8 +542,9 @@ def init_waterfall_websocket(app: Flask):
                             bias_t=bias_t,
                         )
                     except NotImplementedError as e:
-                        app_module.release_sdr_device(device_index)
+                        app_module.release_sdr_device(device_index, sdr_type_str)
                         claimed_device = None
+                        claimed_sdr_type = 'rtlsdr'
                         ws.send(json.dumps({
                             'status': 'error',
                             'message': str(e),
@@ -549,8 +553,9 @@ def init_waterfall_websocket(app: Flask):
 
                     # Pre-flight: check the capture binary exists
                     if not shutil.which(iq_cmd[0]):
-                        app_module.release_sdr_device(device_index)
+                        app_module.release_sdr_device(device_index, sdr_type_str)
                         claimed_device = None
+                        claimed_sdr_type = 'rtlsdr'
                         ws.send(json.dumps({
                             'status': 'error',
                             'message': f'Required tool "{iq_cmd[0]}" not found. Install SoapySDR tools (rx_sdr).',
@@ -602,8 +607,9 @@ def init_waterfall_websocket(app: Flask):
                             safe_terminate(iq_process)
                             unregister_process(iq_process)
                             iq_process = None
-                        app_module.release_sdr_device(device_index)
+                        app_module.release_sdr_device(device_index, sdr_type_str)
                         claimed_device = None
+                        claimed_sdr_type = 'rtlsdr'
                         ws.send(json.dumps({
                             'status': 'error',
                             'message': f'Failed to start I/Q capture: {e}',
@@ -806,8 +812,9 @@ def init_waterfall_websocket(app: Flask):
                         unregister_process(iq_process)
                         iq_process = None
                     if claimed_device is not None:
-                        app_module.release_sdr_device(claimed_device)
+                        app_module.release_sdr_device(claimed_device, claimed_sdr_type)
                         claimed_device = None
+                        claimed_sdr_type = 'rtlsdr'
                     _set_shared_capture_state(running=False, generation=my_generation)
                     my_generation = None
                     stop_event.clear()
@@ -825,7 +832,7 @@ def init_waterfall_websocket(app: Flask):
                 safe_terminate(iq_process)
                 unregister_process(iq_process)
             if claimed_device is not None:
-                app_module.release_sdr_device(claimed_device)
+                app_module.release_sdr_device(claimed_device, claimed_sdr_type)
             _set_shared_capture_state(running=False, generation=my_generation)
             # Complete WebSocket close handshake, then shut down the
             # raw socket so Werkzeug cannot write its HTTP 200 response

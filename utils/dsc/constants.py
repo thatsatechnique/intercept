@@ -89,6 +89,15 @@ TELECOMMAND_CODES = {
     201: 'POLL_RESPONSE',      # Poll response
 }
 
+# Full 0-127 telecommand lookup (maps unknown codes to "UNKNOWN")
+TELECOMMAND_CODES_FULL = {i: TELECOMMAND_CODES.get(i, "UNKNOWN") for i in range(128)}
+
+# Format codes that carry telecommand fields
+TELECOMMAND_FORMATS = {112, 114, 116, 120, 123}
+
+# Minimum symbols (after phasing strip) before an EOS can be accepted
+MIN_SYMBOLS_FOR_FORMAT = 12
+
 
 # =============================================================================
 # DSC Symbol Definitions

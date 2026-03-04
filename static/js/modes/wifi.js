@@ -1811,7 +1811,28 @@ const WiFiMode = (function() {
         onNetworkUpdate: (cb) => { onNetworkUpdate = cb; },
         onClientUpdate: (cb) => { onClientUpdate = cb; },
         onProbeRequest: (cb) => { onProbeRequest = cb; },
+
+        // Lifecycle
+        destroy,
     };
+
+    /**
+     * Destroy — close SSE stream and clear polling timers for clean mode switching.
+     */
+    function destroy() {
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+        if (agentPollTimer) {
+            clearInterval(agentPollTimer);
+            agentPollTimer = null;
+        }
+    }
 })();
 
 // Auto-initialize when DOM is ready

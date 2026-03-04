@@ -44,6 +44,7 @@ ais_connected = False
 ais_messages_received = 0
 ais_last_message_time = None
 ais_active_device = None
+ais_active_sdr_type: str | None = None
 _ais_error_logged = True
 
 # Common installation paths for AIS-catcher
@@ -79,6 +80,7 @@ def parse_ais_stream(port: int):
     _ais_error_logged = True
 
     while ais_running:
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(AIS_SOCKET_TIMEOUT)
@@ -151,7 +153,6 @@ def parse_ais_stream(port: int):
                 except socket.timeout:
                     continue
 
-            sock.close()
             ais_connected = False
         except OSError as e:
             ais_connected = False
@@ -159,6 +160,12 @@ def parse_ais_stream(port: int):
                 logger.warning(f"AIS connection error: {e}, reconnecting...")
                 _ais_error_logged = True
             time.sleep(AIS_RECONNECT_DELAY)
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
 
     ais_connected = False
     logger.info("AIS stream parser stopped")
@@ -350,7 +357,7 @@ def ais_status():
 @ais_bp.route('/start', methods=['POST'])
 def start_ais():
     """Start AIS tracking."""
-    global ais_running, ais_active_device
+    global ais_running, ais_active_device, ais_active_sdr_type
 
     with app_module.ais_lock:
         if ais_running:
@@ -397,7 +404,7 @@ def start_ais():
 
     # Check if device is available
     device_int = int(device)
-    error = app_module.claim_sdr_device(device_int, 'ais')
+    error = app_module.claim_sdr_device(device_int, 'ais', sdr_type_str)
     if error:
         return jsonify({
             'status': 'error',
@@ -436,20 +443,23 @@ def start_ais():
 
         if app_module.ais_process.poll() is not None:
             # Release device on failure
-            app_module.release_sdr_device(device_int)
+            app_module.release_sdr_device(device_int, sdr_type_str)
             stderr_output = ''
             if app_module.ais_process.stderr:
                 try:
                     stderr_output = app_module.ais_process.stderr.read().decode('utf-8', errors='ignore').strip()
                 except Exception:
                     pass
+            if stderr_output:
+                logger.error(f"AIS-catcher stderr:\n{stderr_output}")
             error_msg = 'AIS-catcher failed to start. Check SDR device connection.'
             if stderr_output:
-                error_msg += f' Error: {stderr_output[:200]}'
+                error_msg += f' Error: {stderr_output[:500]}'
             return jsonify({'status': 'error', 'message': error_msg}), 500
 
         ais_running = True
         ais_active_device = device
+        ais_active_sdr_type = sdr_type_str
 
         # Start TCP parser thread
         thread = threading.Thread(target=parse_ais_stream, args=(tcp_port,), daemon=True)
@@ -463,7 +473,7 @@ def start_ais():
         })
     except Exception as e:
         # Release device on failure
-        app_module.release_sdr_device(device_int)
+        app_module.release_sdr_device(device_int, sdr_type_str)
         logger.error(f"Failed to start AIS-catcher: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -471,7 +481,7 @@ def start_ais():
 @ais_bp.route('/stop', methods=['POST'])
 def stop_ais():
     """Stop AIS tracking."""
-    global ais_running, ais_active_device
+    global ais_running, ais_active_device, ais_active_sdr_type
 
     with app_module.ais_lock:
         if app_module.ais_process:
@@ -490,10 +500,11 @@ def stop_ais():
 
         # Release device from registry
         if ais_active_device is not None:
-            app_module.release_sdr_device(ais_active_device)
+            app_module.release_sdr_device(ais_active_device, ais_active_sdr_type or 'rtlsdr')
 
         ais_running = False
         ais_active_device = None
+        ais_active_sdr_type = None
 
     app_module.ais_vessels.clear()
     return jsonify({'status': 'stopped'})

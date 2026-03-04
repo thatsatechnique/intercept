@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import platform
-import pty
 import queue
 import re
 import select
@@ -396,6 +394,7 @@ def start_bt_scan():
                 )
 
             elif scan_mode == 'bluetoothctl':
+                import pty
                 master_fd, slave_fd = pty.openpty()
                 app_module.bt_process = subprocess.Popen(
                     ['bluetoothctl'],

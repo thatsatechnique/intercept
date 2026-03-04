@@ -91,7 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     libzmq3-dev \
     libpulse-dev \
-    libfftw3-dev \
+    libfftw3-bin \
     liblapack-dev \
     libglib2.0-dev \
     libxml2-dev \
@@ -200,6 +200,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && make install \
     && ldconfig \
     && rm -rf /tmp/hackrf \
+    # Install radiosonde_auto_rx (weather balloon decoder)
+    && cd /tmp \
+    && git clone --depth 1 https://github.com/projecthorus/radiosonde_auto_rx.git \
+    && cd radiosonde_auto_rx/auto_rx \
+    && pip install --no-cache-dir -r requirements.txt \
+    && bash build.sh \
+    && mkdir -p /opt/radiosonde_auto_rx/auto_rx \
+    && cp -r . /opt/radiosonde_auto_rx/auto_rx/ \
+    && chmod +x /opt/radiosonde_auto_rx/auto_rx/auto_rx.py \
+    && cd /tmp \
+    && rm -rf /tmp/radiosonde_auto_rx \
     # Build rtlamr (utility meter decoder - requires Go)
     && cd /tmp \
     && curl -fsSL "https://go.dev/dl/go1.22.5.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xz \
@@ -245,8 +256,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Strip Windows CRLF from shell scripts (git autocrlf can re-introduce them)
+RUN find . -name '*.sh' -exec sed -i 's/\r$//' {} +
+
 # Create data directory for persistence
-RUN mkdir -p /app/data /app/data/weather_sat
+RUN mkdir -p /app/data /app/data/weather_sat /app/data/radiosonde/logs
 
 # Expose web interface port
 EXPOSE 5050
@@ -263,4 +277,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -sf http://localhost:5050/health || exit 1
 
 # Run the application
-CMD ["python", "intercept.py"]
+CMD ["/bin/bash", "start.sh"]

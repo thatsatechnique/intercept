@@ -55,6 +55,32 @@ Support the developer of this open-source project
 
 ---
 
+## CW / Morse Decoder Notes
+
+Live backend:
+- Uses `rtl_fm` piped into `multimon-ng` (`MORSE_CW`) for real-time decode.
+
+Recommended baseline settings:
+- **Tone**: `700 Hz`
+- **Bandwidth**: `200 Hz` (use `100 Hz` for crowded bands, `400 Hz` for drifting signals)
+- **Threshold Mode**: `Auto`
+- **WPM Mode**: `Auto`
+
+Auto Tone Track behavior:
+- Continuously measures nearby tone energy around the configured CW pitch.
+- Steers the detector toward the strongest valid CW tone when signal-to-noise is sufficient.
+- Use **Hold Tone Lock** to freeze tracking once the desired signal is centered.
+
+Troubleshooting (no decode / noisy decode):
+- Confirm demod path is **USB/CW-compatible** and frequency is tuned correctly.
+- If multiple SDRs are connected and the selected one has no PCM output, Morse startup now auto-tries other detected SDR devices and reports the active device/serial in status logs.
+- Match **tone** and **bandwidth** to the actual sidetone/pitch.
+- Try **Threshold Auto** first; if needed, switch to manual threshold and recalibrate.
+- Use **Reset/Calibrate** after major frequency or band condition changes.
+- Raise **Minimum Signal Gate** to suppress random noise keying.
+
+---
+
 ## Installation / Debian / Ubuntu / MacOS
 
 **1. Clone and run:**
@@ -62,8 +88,10 @@ Support the developer of this open-source project
 git clone https://github.com/smittix/intercept.git
 cd intercept
 ./setup.sh
-sudo -E venv/bin/python intercept.py
+sudo ./start.sh
 ```
+
+> **Production vs Dev server:** `start.sh` auto-detects gunicorn + gevent and runs a production server with cooperative greenlets — handles multiple SSE/WebSocket clients without blocking. Falls back to Flask dev server if gunicorn is not installed. For quick local development, you can still use `sudo -E venv/bin/python intercept.py` directly.
 
 ### Docker
 
@@ -148,7 +176,7 @@ Set these as environment variables for either local installs or Docker:
 ```bash
 INTERCEPT_ADSB_AUTO_START=true \
 INTERCEPT_SHARED_OBSERVER_LOCATION=false \
-sudo -E venv/bin/python intercept.py
+sudo ./start.sh
 ```
 
 **Docker example (.env)**

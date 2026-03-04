@@ -1909,7 +1909,42 @@ const BtLocate = (function() {
         handleDetection,
         invalidateMap,
         fetchPairedIrks,
+        destroy,
     };
+
+    /**
+     * Destroy — close SSE stream and clear all timers for clean mode switching.
+     */
+    function destroy() {
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+        if (durationTimer) {
+            clearInterval(durationTimer);
+            durationTimer = null;
+        }
+        if (mapStabilizeTimer) {
+            clearInterval(mapStabilizeTimer);
+            mapStabilizeTimer = null;
+        }
+        if (queuedDetectionTimer) {
+            clearTimeout(queuedDetectionTimer);
+            queuedDetectionTimer = null;
+        }
+        if (crosshairResetTimer) {
+            clearTimeout(crosshairResetTimer);
+            crosshairResetTimer = null;
+        }
+        if (beepTimer) {
+            clearInterval(beepTimer);
+            beepTimer = null;
+        }
+    }
 })();
 
 window.BtLocate = BtLocate;

@@ -66,6 +66,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/function-strip.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/toast.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/ux-platform.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/signal-waveform.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/core/components.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/modes/waterfall.css') }}?v={{ version }}&r=wfdeck19">
     <script>
         window.INTERCEPT_MODE_STYLE_MAP = {
@@ -81,7 +83,10 @@
             bt_locate: "{{ url_for('static', filename='css/modes/bt_locate.css') }}?v={{ version }}&r=btlocate4",
             spaceweather: "{{ url_for('static', filename='css/modes/space-weather.css') }}",
             wefax: "{{ url_for('static', filename='css/modes/wefax.css') }}",
-            morse: "{{ url_for('static', filename='css/modes/morse.css') }}"
+            morse: "{{ url_for('static', filename='css/modes/morse.css') }}",
+            radiosonde: "{{ url_for('static', filename='css/modes/radiosonde.css') }}",
+            meteor: "{{ url_for('static', filename='css/modes/meteor.css') }}",
+            system: "{{ url_for('static', filename='css/modes/system.css') }}"
         };
         window.INTERCEPT_MODE_STYLE_LOADED = {};
         window.INTERCEPT_MODE_STYLE_PROMISES = {};
@@ -312,6 +317,10 @@
                             <button class="mode-card mode-card-sm" onclick="selectMode('gps')">
                                 <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 21.7C17.3 17 20 13 20 10a8 8 0 1 0-16 0c0 3 2.7 7 8 11.7z"/></svg></span>
                                 <span class="mode-name">GPS</span>
+                            </button>
+                            <button class="mode-card mode-card-sm" onclick="selectMode('radiosonde')">
+                                <span class="mode-icon icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><circle cx="12" cy="12" r="4"/><path d="M12 16v6"/><path d="M4.93 4.93l4.24 4.24"/><path d="M14.83 14.83l4.24 4.24"/></svg></span>
+                                <span class="mode-name">Radiosonde</span>
                             </button>
                         </div>
                     </div>
@@ -706,6 +715,8 @@
 
                 {% include 'partials/modes/ais.html' %}
 
+                {% include 'partials/modes/radiosonde.html' %}
+
                 {% include 'partials/modes/spy-stations.html' %}
 
                 {% include 'partials/modes/meshtastic.html' %}
@@ -716,6 +727,8 @@
 
                 {% include 'partials/modes/bt_locate.html' %}
                 {% include 'partials/modes/waterfall.html' %}
+                {% include 'partials/modes/meteor.html' %}
+                {% include 'partials/modes/system.html' %}
 
 
 
@@ -3097,6 +3110,11 @@
                     </div>
                 </div>
 
+                <div id="morseDiagLog" style="display: none; margin-bottom: 8px; max-height: 60px; overflow-y: auto;
+                    background: #080812; border: 1px solid #1a1a2e; border-radius: 4px; padding: 4px 8px;
+                    font-family: var(--font-mono); font-size: 10px; color: #556677; line-height: 1.6;">
+                </div>
+
                 <!-- Morse Decoded Output -->
                 <div id="morseOutputPanel" style="display: none; margin-bottom: 12px;">
                     <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px;">
@@ -3110,8 +3128,21 @@
                             </div>
                         </div>
                         <div id="morseDecodedText" class="morse-decoded-panel"></div>
+                        <div id="morseRawPanel" class="morse-raw-panel" style="display: none;">
+                            <div class="morse-raw-label">Raw Elements</div>
+                            <div id="morseRawText" class="morse-raw-text"></div>
+                        </div>
+                        <div id="morseMetricsPanel" class="morse-metrics-panel">
+                            <span id="morseMetricState">STATE idle</span>
+                            <span id="morseMetricTone">TONE -- Hz</span>
+                            <span id="morseMetricLevel">LEVEL --</span>
+                            <span id="morseMetricThreshold">THRESH --</span>
+                            <span id="morseMetricNoise">NOISE --</span>
+                            <span id="morseMetricStopMs">STOP -- ms</span>
+                        </div>
                         <div class="morse-status-bar">
-                            <span class="status-item" id="morseStatusBarWpm">15 WPM</span>
+                            <span class="status-item" id="morseStatusBarState">IDLE</span>
+                            <span class="status-item" id="morseStatusBarWpm">-- WPM</span>
                             <span class="status-item" id="morseStatusBarTone">700 Hz</span>
                             <span class="status-item" id="morseStatusBarChars">0 chars decoded</span>
                         </div>
@@ -3139,6 +3170,104 @@
                     </div>
                 </div>
 
+                <!-- Radiosonde Visuals -->
+                <div id="radiosondeVisuals" class="radiosonde-visuals-container" style="display: none;">
+                    <div class="radiosonde-strip">
+                        <div class="radiosonde-strip-inner">
+                            <div class="strip-status">
+                                <div class="status-dot" id="radiosondeStripDot"></div>
+                                <span id="radiosondeStripStatus">STANDBY</span>
+                            </div>
+                            <div class="strip-divider"></div>
+                            <div class="strip-stat">
+                                <span class="strip-value" id="radiosondeStripBalloons">0</span>
+                                <span class="strip-label">BALLOONS</span>
+                            </div>
+                            <div class="strip-stat">
+                                <span class="strip-value" id="radiosondeStripUpdate">--:--:--</span>
+                                <span class="strip-label">LAST UPDATE</span>
+                            </div>
+                            <div class="strip-divider"></div>
+                            <div class="strip-waveform" id="radiosondeStripWaveform"></div>
+                        </div>
+                    </div>
+                    <div id="radiosondeMapContainer" style="flex: 1; min-height: 300px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-primary);"></div>
+                    <div id="radiosondeCardContainer" class="radiosonde-card-container"></div>
+                </div>
+
+                <!-- Meteor Scatter Visuals -->
+                <div id="meteorVisuals" class="meteor-visuals-container" style="display: none;">
+                    <div class="ms-headline">
+                        <div class="ms-headline-left">
+                            <span id="meteorStatusChip" class="ms-headline-tag idle">IDLE</span>
+                            <span class="ms-headline-sub" id="meteorFreqLabel">143.050 MHz</span>
+                        </div>
+                        <div class="ms-headline-right">
+                            <span id="meteorStateTag" class="ms-headline-tag idle">IDLE</span>
+                            <button id="meteorStartBtn" class="preset-btn" style="font-size: 10px; padding: 2px 10px;">Start</button>
+                            <button id="meteorStopBtn" class="preset-btn" style="font-size: 10px; padding: 2px 10px;" disabled>Stop</button>
+                        </div>
+                    </div>
+                    <div class="ms-stats-strip">
+                        <div class="ms-stat-cell">
+                            <span class="ms-stat-label">Total Pings</span>
+                            <span class="ms-stat-value highlight" id="meteorStatPingsTotal">0</span>
+                        </div>
+                        <div class="ms-stat-cell">
+                            <span class="ms-stat-label">Last 10 Min</span>
+                            <span class="ms-stat-value" id="meteorStatPings10min">0</span>
+                        </div>
+                        <div class="ms-stat-cell">
+                            <span class="ms-stat-label">Strongest SNR</span>
+                            <span class="ms-stat-value" id="meteorStatStrongest">0.0 dB</span>
+                        </div>
+                        <div class="ms-stat-cell">
+                            <span class="ms-stat-label">Noise Floor</span>
+                            <span class="ms-stat-value" id="meteorStatNoiseFloor">-100.0 dB</span>
+                        </div>
+                        <div class="ms-stat-cell">
+                            <span class="ms-stat-label">Uptime</span>
+                            <span class="ms-stat-value" id="meteorStatUptime">0:00</span>
+                        </div>
+                    </div>
+                    <div class="ms-spectrum-wrap">
+                        <canvas id="meteorSpectrumCanvas"></canvas>
+                    </div>
+                    <div class="ms-waterfall-wrap">
+                        <canvas id="meteorWaterfallCanvas"></canvas>
+                        <div class="ms-empty-state" id="meteorEmptyState">
+                            <div class="ms-empty-icon">&#9732;</div>
+                            <div class="ms-empty-text">
+                                Configure frequency and press Start to begin meteor scatter monitoring.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="ms-timeline-wrap">
+                        <canvas id="meteorTimelineCanvas"></canvas>
+                    </div>
+                    <div class="ms-events-panel">
+                        <div class="ms-events-header">
+                            <span class="ms-events-title">Detected Pings</span>
+                            <span class="ms-events-count" id="meteorEventsCount">0 events</span>
+                        </div>
+                        <div class="ms-events-scroll">
+                            <table class="ms-events-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Duration</th>
+                                        <th>SNR</th>
+                                        <th>Offset</th>
+                                        <th>Conf</th>
+                                        <th>Tags</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="meteorEventsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- RF Fax Line Log -->
                 <div id="rfFaxLogPanel" style="display: none; margin-bottom: 12px;">
                     <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px;">
@@ -3153,8 +3282,8 @@
                 </div>
 
                 <!-- OOK Decoder Output Panel -->
-                <div id="ookOutputPanel" style="display: none; margin-bottom: 12px;">
-                    <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px;">
+                <div id="ookOutputPanel" style="display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; padding: 10px;">
+                    <div style="background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; height: 100%; min-height: 0;">
                         <!-- Toolbar row 1: bit order + actions -->
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px;">
                             <span>Decoded Frames</span>
@@ -3169,8 +3298,6 @@
                                         title="Auto-detect best bit order from printable character count">
                                     Suggest <span id="ookSuggestLabel" style="font-size:9px; margin-left:2px;"></span>
                                 </button>
-                                <button class="btn btn-sm btn-ghost" onclick="OokMode.clearOutput()">Clear</button>
-                                <button class="btn btn-sm btn-ghost" onclick="OokMode.exportLog()">CSV</button>
                             </div>
                         </div>
                         <!-- Toolbar row 2: pattern filter -->
@@ -3180,10 +3307,60 @@
                                    oninput="OokMode.filterFrames(this.value)"
                                    style="width: 100%; background: #111; border: 1px solid #222; border-radius: 3px; color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; padding: 3px 6px; box-sizing: border-box;">
                         </div>
-                        <div id="ookOutput" style="max-height: 400px; overflow-y: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);"></div>
+                        <div id="ookOutput" style="flex: 1; min-height: 0; overflow-y: auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);"></div>
+                        <div style="margin-top: 4px; font-size: 10px; color: #555; text-align: right;">
+                            <span id="ookStatusBarFrames">0 frames</span>
+                        </div>
                     </div>
-                    <div style="margin-top: 4px; font-size: 10px; color: #555; text-align: right;">
-                        <span id="ookStatusBarFrames">0 frames</span>
+                </div>
+
+                <!-- System Health Visuals -->
+                <div id="systemVisuals" class="sys-visuals-container" style="display: none;">
+                    <div class="sys-dashboard">
+                        <!-- Row 1: COMPUTE -->
+                        <div class="sys-group-header">Compute</div>
+                        <div class="sys-card" id="sysCardCpu">
+                            <div class="sys-card-header">CPU</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Connecting&hellip;</span></div>
+                        </div>
+                        <div class="sys-card" id="sysCardMemory">
+                            <div class="sys-card-header">Memory</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Connecting&hellip;</span></div>
+                        </div>
+                        <div class="sys-card" id="sysCardTemp">
+                            <div class="sys-card-header">Temperature &amp; Power</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Connecting&hellip;</span></div>
+                        </div>
+
+                        <!-- Row 2: NETWORK & LOCATION -->
+                        <div class="sys-group-header">Network &amp; Location</div>
+                        <div class="sys-card" id="sysCardNetwork">
+                            <div class="sys-card-header">Network</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Connecting&hellip;</span></div>
+                        </div>
+                        <div class="sys-card" id="sysCardLocation">
+                            <div class="sys-card-header">Location &amp; Weather</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Loading&hellip;</span></div>
+                        </div>
+                        <div class="sys-card" id="sysCardInfo">
+                            <div class="sys-card-header">System Info</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Connecting&hellip;</span></div>
+                        </div>
+
+                        <!-- Row 3: EQUIPMENT & OPERATIONS -->
+                        <div class="sys-group-header">Equipment &amp; Operations</div>
+                        <div class="sys-card" id="sysCardDisk">
+                            <div class="sys-card-header">Disk &amp; Storage</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Connecting&hellip;</span></div>
+                        </div>
+                        <div class="sys-card" id="sysCardSdr">
+                            <div class="sys-card-header">SDR Devices</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Scanning&hellip;</span></div>
+                        </div>
+                        <div class="sys-card" id="sysCardProcesses">
+                            <div class="sys-card-header">Active Processes</div>
+                            <div class="sys-card-body"><span class="sys-metric-na">Connecting&hellip;</span></div>
+                        </div>
                     </div>
                 </div>
 
@@ -3242,6 +3419,7 @@
     <script src="{{ url_for('static', filename='js/components/device-card.js') }}"></script>
     <script src="{{ url_for('static', filename='js/components/proximity-radar.js') }}"></script>
     <script src="{{ url_for('static', filename='js/components/timeline-heatmap.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/components/signal-waveform.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/bluetooth.js') }}?v={{ version }}&r=btlocate1"></script>
     <!-- WiFi v2 components -->
     <script src="{{ url_for('static', filename='js/components/channel-chart.js') }}"></script>
@@ -3256,10 +3434,12 @@
     <script src="{{ url_for('static', filename='js/modes/subghz.js') }}?v={{ version }}&r=subghz_layout9"></script>
     <script src="{{ url_for('static', filename='js/modes/bt_locate.js') }}?v={{ version }}&r=btlocate4"></script>
     <script src="{{ url_for('static', filename='js/modes/wefax.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modes/morse.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modes/morse.js') }}?v={{ version }}&r=morse_iq12"></script>
     <script src="{{ url_for('static', filename='js/modes/rf-fax.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/ook.js') }}"></script>
     <script src="{{ url_for('static', filename='js/modes/space-weather.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modes/system.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/modes/meteor.js') }}"></script>
     <script src="{{ url_for('static', filename='js/core/voice-alerts.js') }}?v={{ version }}&r=voicefix2"></script>
     <script src="{{ url_for('static', filename='js/core/keyboard-shortcuts.js') }}"></script>
     <script src="{{ url_for('static', filename='js/core/cheat-sheets.js') }}"></script>
@@ -3398,12 +3578,14 @@
             subghz: { label: 'SubGHz', indicator: 'SUBGHZ', outputTitle: 'SubGHz Transceiver', group: 'signals' },
             aprs: { label: 'APRS', indicator: 'APRS', outputTitle: 'APRS Tracker', group: 'tracking' },
             gps: { label: 'GPS', indicator: 'GPS', outputTitle: 'GPS Receiver', group: 'tracking' },
+            radiosonde: { label: 'Radiosonde', indicator: 'SONDE', outputTitle: 'Radiosonde Decoder', group: 'tracking' },
             satellite: { label: 'Satellite', indicator: 'SATELLITE', outputTitle: 'Satellite Monitor', group: 'space' },
             sstv: { label: 'ISS SSTV', indicator: 'ISS SSTV', outputTitle: 'ISS SSTV Decoder', group: 'space' },
             weathersat: { label: 'Weather Sat', indicator: 'WEATHER SAT', outputTitle: 'Weather Satellite Decoder', group: 'space' },
             sstv_general: { label: 'HF SSTV', indicator: 'HF SSTV', outputTitle: 'HF SSTV Decoder', group: 'space' },
             wefax: { label: 'WeFax', indicator: 'WEFAX', outputTitle: 'Weather Fax Decoder', group: 'space' },
             spaceweather: { label: 'Space Weather', indicator: 'SPACE WX', outputTitle: 'Space Weather Monitor', group: 'space' },
+            meteor: { label: 'Meteor', indicator: 'METEOR', outputTitle: 'Meteor Scatter Monitor', group: 'space' },
             wifi: { label: 'WiFi', indicator: 'WIFI', outputTitle: 'WiFi Scanner', group: 'wireless' },
             bluetooth: { label: 'Bluetooth', indicator: 'BLUETOOTH', outputTitle: 'Bluetooth Scanner', group: 'wireless' },
             bt_locate: { label: 'BT Locate', indicator: 'BT LOCATE', outputTitle: 'BT Locate — SAR Tracker', group: 'wireless' },
@@ -3415,6 +3597,7 @@
             morse: { label: 'Morse', indicator: 'MORSE', outputTitle: 'CW/Morse Decoder', group: 'signals' },
             rf_fax: { label: 'RF Fax', indicator: 'RF FAX', outputTitle: 'RF Fax / Bitmap Decoder', group: 'signals' },
             ook: { label: 'OOK Decoder', indicator: 'OOK', outputTitle: 'OOK Signal Decoder', group: 'signals' },
+            system: { label: 'System', indicator: 'SYSTEM', outputTitle: 'System Health Monitor', group: 'system' },
         };
         const validModes = new Set(Object.keys(modeCatalog));
         window.interceptModeCatalog = Object.assign({}, modeCatalog);
@@ -3511,7 +3694,7 @@
 
         // Pager message filter settings
         let pagerFilters = {
-            hideToneOnly: true,
+            hideToneOnly: false,
             keywords: []
         };
 
@@ -3563,7 +3746,11 @@
             const saved = localStorage.getItem('pagerFilters');
             if (saved) {
                 try {
-                    pagerFilters = JSON.parse(saved);
+                    const parsed = JSON.parse(saved);
+                    // Only persist keywords across sessions.
+                    // hideToneOnly defaults to false every session so users
+                    // always see the full traffic stream unless they opt-in.
+                    if (Array.isArray(parsed.keywords)) pagerFilters.keywords = parsed.keywords;
                 } catch (e) {
                     console.warn('Failed to load pager filters:', e);
                 }
@@ -3864,6 +4051,7 @@
 
             // Load pager message filters
             loadPagerFilters();
+            if (typeof SignalCards !== 'undefined') SignalCards.updateMutedIndicator();
 
             // Initialize dropdown nav active state
             updateDropdownActiveState();
@@ -3943,6 +4131,11 @@
             return {
                 pager: Boolean(isRunning),
                 sensor: Boolean(isSensorRunning),
+                morse: Boolean(
+                    typeof MorseMode !== 'undefined'
+                    && typeof MorseMode.isActive === 'function'
+                    && MorseMode.isActive()
+                ),
                 wifi: Boolean(
                     ((typeof WiFiMode !== 'undefined' && typeof WiFiMode.isScanning === 'function' && WiFiMode.isScanning()) || isWifiRunning)
                 ),
@@ -3963,6 +4156,12 @@
             }
             if (isSensorRunning && typeof stopSensorDecoding === 'function') {
                 Promise.resolve(stopSensorDecoding()).catch(() => { });
+            }
+            const morseActive = typeof MorseMode !== 'undefined'
+                && typeof MorseMode.isActive === 'function'
+                && MorseMode.isActive();
+            if (morseActive && typeof MorseMode.stop === 'function') {
+                Promise.resolve(MorseMode.stop()).catch(() => { });
             }
 
             const wifiScanActive = (
@@ -4089,6 +4288,12 @@
                 if (isSensorRunning) {
                     stopTasks.push(awaitStopAction('sensor', () => stopSensorDecoding(), LOCAL_STOP_TIMEOUT_MS));
                 }
+                const morseActive = typeof MorseMode !== 'undefined'
+                    && typeof MorseMode.isActive === 'function'
+                    && MorseMode.isActive();
+                if (morseActive && typeof MorseMode.stop === 'function') {
+                    stopTasks.push(awaitStopAction('morse', () => MorseMode.stop(), LOCAL_STOP_TIMEOUT_MS));
+                }
                 const wifiScanActive = (
                     typeof WiFiMode !== 'undefined'
                     && typeof WiFiMode.isScanning === 'function'
@@ -4121,9 +4326,32 @@
             const stopPhaseMs = Math.round(performance.now() - stopPhaseStartMs);
             await styleReadyPromise;
 
-            // Clean up SubGHz SSE connection when leaving the mode
-            if (typeof SubGhz !== 'undefined' && currentMode === 'subghz' && mode !== 'subghz') {
-                SubGhz.destroy();
+            // Generic module cleanup — destroy previous mode's timers, SSE, etc.
+            const moduleDestroyMap = {
+                subghz: () => typeof SubGhz !== 'undefined' && SubGhz.destroy(),
+                morse: () => typeof MorseMode !== 'undefined' && MorseMode.destroy?.(),
+                spaceweather: () => typeof SpaceWeather !== 'undefined' && SpaceWeather.destroy?.(),
+                weathersat: () => typeof WeatherSat !== 'undefined' && WeatherSat.suspend?.(),
+                wefax: () => typeof WeFax !== 'undefined' && WeFax.destroy?.(),
+                system: () => typeof SystemHealth !== 'undefined' && SystemHealth.destroy?.(),
+                waterfall: () => typeof Waterfall !== 'undefined' && Waterfall.destroy?.(),
+                gps: () => typeof GPS !== 'undefined' && GPS.destroy?.(),
+                meshtastic: () => typeof Meshtastic !== 'undefined' && Meshtastic.destroy?.(),
+                bluetooth: () => typeof BluetoothMode !== 'undefined' && BluetoothMode.destroy?.(),
+                wifi: () => typeof WiFiMode !== 'undefined' && WiFiMode.destroy?.(),
+                bt_locate: () => typeof BtLocate !== 'undefined' && BtLocate.destroy?.(),
+                sstv: () => typeof SSTV !== 'undefined' && SSTV.destroy?.(),
+                sstv_general: () => typeof SSTVGeneral !== 'undefined' && SSTVGeneral.destroy?.(),
+                websdr: () => typeof WebSDR !== 'undefined' && WebSDR.destroy?.(),
+                spystations: () => typeof SpyStations !== 'undefined' && SpyStations.destroy?.(),
+                ais: () => { if (aisEventSource) { aisEventSource.close(); aisEventSource = null; } },
+                acars: () => { if (acarsMainEventSource) { acarsMainEventSource.close(); acarsMainEventSource = null; } },
+                vdl2: () => { if (vdl2MainEventSource) { vdl2MainEventSource.close(); vdl2MainEventSource = null; } },
+                radiosonde: () => { if (radiosondeEventSource) { radiosondeEventSource.close(); radiosondeEventSource = null; } },
+                meteor: () => typeof MeteorScatter !== 'undefined' && MeteorScatter.destroy?.(),
+            };
+            if (previousMode && previousMode !== mode && moduleDestroyMap[previousMode]) {
+                try { moduleDestroyMap[previousMode](); } catch(e) { console.warn(`[switchMode] destroy ${previousMode} failed:`, e); }
             }
 
             currentMode = mode;
@@ -4167,6 +4395,7 @@
             document.getElementById('aprsMode')?.classList.toggle('active', mode === 'aprs');
             document.getElementById('tscmMode')?.classList.toggle('active', mode === 'tscm');
             document.getElementById('aisMode')?.classList.toggle('active', mode === 'ais');
+            document.getElementById('radiosondeMode')?.classList.toggle('active', mode === 'radiosonde');
             document.getElementById('spystationsMode')?.classList.toggle('active', mode === 'spystations');
             document.getElementById('meshtasticMode')?.classList.toggle('active', mode === 'meshtastic');
             document.getElementById('websdrMode')?.classList.toggle('active', mode === 'websdr');
@@ -4176,6 +4405,8 @@
             document.getElementById('morseMode')?.classList.toggle('active', mode === 'morse');
             document.getElementById('rfFaxMode')?.classList.toggle('active', mode === 'rf_fax');
             document.getElementById('ookMode')?.classList.toggle('active', mode === 'ook');
+            document.getElementById('meteorMode')?.classList.toggle('active', mode === 'meteor');
+            document.getElementById('systemMode')?.classList.toggle('active', mode === 'system');
 
 
             const pagerStats = document.getElementById('pagerStats');
@@ -4217,9 +4448,16 @@
             const wefaxVisuals = document.getElementById('wefaxVisuals');
             const spaceWeatherVisuals = document.getElementById('spaceWeatherVisuals');
             const waterfallVisuals = document.getElementById('waterfallVisuals');
+            const radiosondeVisuals = document.getElementById('radiosondeVisuals');
+            const meteorVisuals = document.getElementById('meteorVisuals');
+            const systemVisuals = document.getElementById('systemVisuals');
             if (wifiLayoutContainer) wifiLayoutContainer.style.display = mode === 'wifi' ? 'flex' : 'none';
             if (btLayoutContainer) btLayoutContainer.style.display = mode === 'bluetooth' ? 'flex' : 'none';
             if (satelliteVisuals) satelliteVisuals.style.display = mode === 'satellite' ? 'block' : 'none';
+            const satFrame = document.getElementById('satelliteDashboardFrame');
+            if (satFrame && satFrame.contentWindow) {
+                satFrame.contentWindow.postMessage({type: 'satellite-visibility', visible: mode === 'satellite'}, '*');
+            }
             if (aprsVisuals) aprsVisuals.style.display = mode === 'aprs' ? 'flex' : 'none';
             if (tscmVisuals) tscmVisuals.style.display = mode === 'tscm' ? 'flex' : 'none';
             if (spyStationsVisuals) spyStationsVisuals.style.display = mode === 'spystations' ? 'flex' : 'none';
@@ -4234,6 +4472,9 @@
             if (wefaxVisuals) wefaxVisuals.style.display = mode === 'wefax' ? 'flex' : 'none';
             if (spaceWeatherVisuals) spaceWeatherVisuals.style.display = mode === 'spaceweather' ? 'flex' : 'none';
             if (waterfallVisuals) waterfallVisuals.style.display = mode === 'waterfall' ? 'flex' : 'none';
+            if (radiosondeVisuals) radiosondeVisuals.style.display = mode === 'radiosonde' ? 'flex' : 'none';
+            if (meteorVisuals) meteorVisuals.style.display = mode === 'meteor' ? 'flex' : 'none';
+            if (systemVisuals) systemVisuals.style.display = mode === 'system' ? 'flex' : 'none';
 
             // Prevent Leaflet heatmap redraws on hidden BT Locate map containers.
             if (typeof BtLocate !== 'undefined' && BtLocate.setActiveMode) {
@@ -4255,6 +4496,10 @@
             const sensorTimelineContainer = document.getElementById('sensorTimelineContainer');
             if (pagerTimelineContainer) pagerTimelineContainer.style.display = mode === 'pager' ? 'block' : 'none';
             if (sensorTimelineContainer) sensorTimelineContainer.style.display = mode === 'sensor' ? 'block' : 'none';
+            const pagerScopePanel = document.getElementById('pagerScopePanel');
+            if (pagerScopePanel && mode !== 'pager') pagerScopePanel.style.display = 'none';
+            const sensorScopePanel = document.getElementById('sensorScopePanel');
+            if (sensorScopePanel && mode !== 'sensor') sensorScopePanel.style.display = 'none';
             const morseScopePanel = document.getElementById('morseScopePanel');
             const morseOutputPanel = document.getElementById('morseOutputPanel');
             if (morseScopePanel && mode !== 'morse') morseScopePanel.style.display = 'none';
@@ -4265,6 +4510,8 @@
             if (rfFaxLogPanel && mode !== 'rf_fax') rfFaxLogPanel.style.display = 'none';
             const ookOutputPanel = document.getElementById('ookOutputPanel');
             if (ookOutputPanel && mode !== 'ook') ookOutputPanel.style.display = 'none';
+            const morseDiagLog = document.getElementById('morseDiagLog');
+            if (morseDiagLog && mode !== 'morse') morseDiagLog.style.display = 'none';
 
             // Update output panel title based on mode
             const outputTitle = document.getElementById('outputTitle');
@@ -4279,26 +4526,13 @@
                 refreshTscmDevices();
             }
 
-            // Initialize/destroy Space Weather mode
-            if (mode !== 'spaceweather') {
-                if (typeof SpaceWeather !== 'undefined' && SpaceWeather.destroy) SpaceWeather.destroy();
-            }
-
-            // Suspend Weather Satellite background timers/streams when leaving the mode
-            if (mode !== 'weathersat') {
-                if (typeof WeatherSat !== 'undefined' && WeatherSat.suspend) WeatherSat.suspend();
-            }
-
-            // Suspend WeFax background streams when leaving the mode
-            if (mode !== 'wefax') {
-                if (typeof WeFax !== 'undefined' && WeFax.destroy) WeFax.destroy();
-            }
+            // Module destroy is now handled by moduleDestroyMap above.
 
             // Show/hide Device Intelligence for modes that use it (not for satellite/aircraft/tscm)
             const reconBtn = document.getElementById('reconBtn');
             const intelBtn = document.querySelector('[onclick="exportDeviceDB()"]');
             const reconPanel = document.getElementById('reconPanel');
-            if (mode === 'satellite' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'gps' || mode === 'aprs' || mode === 'tscm' || mode === 'spystations' || mode === 'meshtastic' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'waterfall') {
+            if (mode === 'satellite' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'gps' || mode === 'aprs' || mode === 'tscm' || mode === 'spystations' || mode === 'meshtastic' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'waterfall' || mode === 'meteor' || mode === 'system') {
                 if (reconPanel) reconPanel.style.display = 'none';
                 if (reconBtn) reconBtn.style.display = 'none';
                 if (intelBtn) intelBtn.style.display = 'none';
@@ -4319,16 +4553,18 @@
             // Show RTL-SDR device section for modes that use it
             const rtlDeviceSection = document.getElementById('rtlDeviceSection');
             if (rtlDeviceSection) {
-                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse' || mode === 'rf_fax' || mode === 'ook') ? 'block' : 'none';
+                rtlDeviceSection.style.display = (mode === 'pager' || mode === 'sensor' || mode === 'rtlamr' || mode === 'aprs' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'morse' || mode === 'rf_fax' || mode === 'ook' || mode === 'radiosonde' || mode === 'meteor') ? 'block' : 'none';
                 // Save original sidebar position of SDR device section (once)
                 if (!rtlDeviceSection._origParent) {
                     rtlDeviceSection._origParent = rtlDeviceSection.parentNode;
                     rtlDeviceSection._origNext = rtlDeviceSection.nextElementSibling;
                 }
-                // For morse, rf_fax, and ook modes, move SDR device section inside the mode panel after the title
+                // For morse, rf_fax, ook, radiosonde, and meteor modes, move SDR device section inside the mode panel after the title
                 const morsePanel = document.getElementById('morseMode');
                 const rfFaxPanel = document.getElementById('rfFaxMode');
                 const ookPanel = document.getElementById('ookMode');
+                const radiosondePanel = document.getElementById('radiosondeMode');
+                const meteorPanel = document.getElementById('meteorMode');
                 if (mode === 'morse' && morsePanel) {
                     const firstSection = morsePanel.querySelector('.section');
                     if (firstSection) firstSection.after(rtlDeviceSection);
@@ -4337,6 +4573,12 @@
                     if (firstSection) firstSection.after(rtlDeviceSection);
                 } else if (mode === 'ook' && ookPanel) {
                     const firstSection = ookPanel.querySelector('.section');
+                    if (firstSection) firstSection.after(rtlDeviceSection);
+                } else if (mode === 'radiosonde' && radiosondePanel) {
+                    const firstSection = radiosondePanel.querySelector('.section');
+                    if (firstSection) firstSection.after(rtlDeviceSection);
+                } else if (mode === 'meteor' && meteorPanel) {
+                    const firstSection = meteorPanel.querySelector('.section');
                     if (firstSection) firstSection.after(rtlDeviceSection);
                 } else if (rtlDeviceSection._origParent && rtlDeviceSection.parentNode !== rtlDeviceSection._origParent) {
                     // Restore to original sidebar position when leaving an injected mode
@@ -4364,8 +4606,8 @@
             // Hide output console for modes with their own visualizations
             const outputEl = document.getElementById('output');
             const statusBar = document.querySelector('.status-bar');
-            if (outputEl) outputEl.style.display = (mode === 'satellite' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'aprs' || mode === 'wifi' || mode === 'bluetooth' || mode === 'tscm' || mode === 'spystations' || mode === 'meshtastic' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'bt_locate' || mode === 'waterfall') ? 'none' : 'block';
-            if (statusBar) statusBar.style.display = (mode === 'satellite' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'waterfall') ? 'none' : 'flex';
+            if (outputEl) outputEl.style.display = (mode === 'satellite' || mode === 'sstv' || mode === 'weathersat' || mode === 'sstv_general' || mode === 'wefax' || mode === 'aprs' || mode === 'wifi' || mode === 'bluetooth' || mode === 'tscm' || mode === 'spystations' || mode === 'meshtastic' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'bt_locate' || mode === 'waterfall' || mode === 'morse' || mode === 'meteor' || mode === 'system' || mode === 'ook') ? 'none' : 'block';
+            if (statusBar) statusBar.style.display = (mode === 'satellite' || mode === 'websdr' || mode === 'subghz' || mode === 'spaceweather' || mode === 'waterfall' || mode === 'morse' || mode === 'meteor' || mode === 'system') ? 'none' : 'flex';
 
             // Restore sidebar when leaving Meshtastic mode (user may have collapsed it)
             if (mode !== 'meshtastic') {
@@ -4443,12 +4685,19 @@
                 RfFaxMode.init();
             } else if (mode === 'ook') {
                 OokMode.init();
+            } else if (mode === 'radiosonde') {
+                initRadiosondeWaveform();
+                initRadiosondeMap();
+                setTimeout(() => {
+                    if (radiosondeMap) radiosondeMap.invalidateSize();
+                }, 100);
+            } else if (mode === 'meteor') {
+                MeteorScatter.init();
+            } else if (mode === 'system') {
+                SystemHealth.init();
             }
 
-            // Destroy Waterfall WebSocket when leaving SDR receiver modes
-            if (mode !== 'waterfall' && typeof Waterfall !== 'undefined' && Waterfall.destroy) {
-                Promise.resolve(Waterfall.destroy()).catch(() => {});
-            }
+            // Waterfall destroy is now handled by moduleDestroyMap above.
 
             const totalMs = Math.round(performance.now() - switchStartMs);
             console.info(
@@ -5458,6 +5707,7 @@
         let allMessages = [];
 
         function exportCSV() {
+            if (currentMode === 'ook') { OokMode.exportLog(); return; }
             if (allMessages.length === 0) {
                 alert('No messages to export');
                 return;
@@ -5479,6 +5729,7 @@
         }
 
         function exportJSON() {
+            if (currentMode === 'ook') { OokMode.exportJSON(); return; }
             if (allMessages.length === 0) {
                 alert('No messages to export');
                 return;
@@ -5653,37 +5904,41 @@
         let currentDeviceList = [];
 
         // SDR Device Usage Tracking
-        // Tracks which mode is using which device index
+        // Tracks which mode is using which device (keyed by "sdr_type:index")
         const sdrDeviceUsage = {
-            // deviceIndex: 'modeName' (e.g., 0: 'pager', 1: 'scanner')
+            // "sdr_type:index": 'modeName' (e.g., "rtlsdr:0": 'pager', "hackrf:0": 'scanner')
         };
 
-        function getDeviceInUseBy(deviceIndex) {
-            return sdrDeviceUsage[deviceIndex] || null;
+        function getDeviceInUseBy(deviceIndex, sdrType) {
+            const key = `${sdrType || getSelectedSDRType()}:${deviceIndex}`;
+            return sdrDeviceUsage[key] || null;
         }
 
-        function isDeviceInUse(deviceIndex) {
-            return sdrDeviceUsage[deviceIndex] !== undefined;
+        function isDeviceInUse(deviceIndex, sdrType) {
+            const key = `${sdrType || getSelectedSDRType()}:${deviceIndex}`;
+            return sdrDeviceUsage[key] !== undefined;
         }
 
-        function reserveDevice(deviceIndex, modeName) {
-            sdrDeviceUsage[deviceIndex] = modeName;
+        function reserveDevice(deviceIndex, modeName, sdrType) {
+            const key = `${sdrType || getSelectedSDRType()}:${deviceIndex}`;
+            sdrDeviceUsage[key] = modeName;
             updateDeviceSelectStatus();
         }
 
         function releaseDevice(modeName) {
-            for (const [idx, mode] of Object.entries(sdrDeviceUsage)) {
+            for (const [key, mode] of Object.entries(sdrDeviceUsage)) {
                 if (mode === modeName) {
-                    delete sdrDeviceUsage[idx];
+                    delete sdrDeviceUsage[key];
                 }
             }
             updateDeviceSelectStatus();
         }
 
         function getAvailableDevice() {
-            // Find first device not in use
+            // Find first device not in use (within selected SDR type)
+            const sdrType = getSelectedSDRType();
             for (const device of currentDeviceList) {
-                if (!isDeviceInUse(device.index)) {
+                if ((device.sdr_type || 'rtlsdr') === sdrType && !isDeviceInUse(device.index, sdrType)) {
                     return device.index;
                 }
             }
@@ -5695,10 +5950,11 @@
             const select = document.getElementById('deviceSelect');
             if (!select) return;
 
+            const sdrType = getSelectedSDRType();
             const options = select.querySelectorAll('option');
             options.forEach(opt => {
                 const idx = parseInt(opt.value);
-                const usedBy = getDeviceInUseBy(idx);
+                const usedBy = getDeviceInUseBy(idx, sdrType);
                 const baseName = opt.textContent.replace(/ \[.*\]$/, ''); // Remove existing status
                 if (usedBy) {
                     opt.textContent = `${baseName} [${usedBy.toUpperCase()}]`;
@@ -6659,6 +6915,7 @@
         }
 
         function clearMessages() {
+            if (currentMode === 'ook') { OokMode.clearOutput(); return; }
             document.getElementById('output').innerHTML = `
                 <div class="placeholder" style="color: #888; text-align: center; padding: 50px;">
                     Messages cleared. ${isRunning || isSensorRunning ? 'Waiting for new messages...' : 'Start decoding to receive messages.'}
@@ -6772,20 +7029,21 @@
                 return null; // Can't determine
             }
 
-            // Check for high entropy (random-looking data)
-            const printableRatio = (message.match(/[a-zA-Z0-9\s.,!?-]/g) || []).length / message.length;
-
-            // Check for common encrypted patterns (hex strings, base64-like)
-            const hexPattern = /^[0-9A-Fa-f\s]+$/;
+            // Check for non-printable characters (outside printable ASCII range)
             const hasNonPrintable = /[^\x20-\x7E]/.test(message);
 
-            if (printableRatio > 0.8 && !hasNonPrintable) {
-                return false; // Likely plaintext
-            } else if (hexPattern.test(message.replace(/\s/g, '')) || hasNonPrintable) {
-                return true; // Likely encrypted or encoded
+            // Check for common encrypted patterns (hex strings)
+            const hexPattern = /^[0-9A-Fa-f\s]+$/;
+
+            if (hasNonPrintable) {
+                return true; // Contains non-printable chars — likely encrypted or encoded
+            }
+            if (hexPattern.test(message.replace(/\s/g, ''))) {
+                return true; // Pure hex data — likely encoded
             }
 
-            return null; // Unknown
+            // All printable ASCII (covers base64, structured data, punctuation, etc.)
+            return false; // Likely plaintext
         }
 
         // Generate device fingerprint
@@ -9779,6 +10037,10 @@
             const isAgentMode = typeof currentAgent !== 'undefined' && currentAgent !== 'local';
             aprsCurrentAgent = isAgentMode ? currentAgent : null;
 
+            // Check for remote SDR (only for local mode)
+            const remoteConfig = isAgentMode ? null : getRemoteSDRConfig();
+            if (remoteConfig === false) return; // Validation failed
+
             // Build request body
             const requestBody = {
                 region,
@@ -9786,6 +10048,12 @@
                 gain: parseInt(gain),
                 sdr_type: sdrType
             };
+
+            // Add rtl_tcp params if using remote SDR
+            if (remoteConfig) {
+                requestBody.rtl_tcp_host = remoteConfig.host;
+                requestBody.rtl_tcp_port = remoteConfig.port;
+            }
 
             // Add custom frequency if selected
             if (region === 'custom') {

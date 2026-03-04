@@ -6,30 +6,31 @@ import io
 import json
 import os
 import platform
-import pty
 import queue
 import shutil
 import subprocess
 import threading
 import time
 from datetime import datetime
-from typing import Generator
+from typing import Any, Generator
 
-from flask import Blueprint, jsonify, request, Response
+from flask import Blueprint, Response, jsonify, request
 
 import app as app_module
-from utils.logging import sensor_logger as logger
-from utils.validation import validate_device_index, validate_gain, validate_ppm
-from utils.sdr import SDRFactory, SDRType
-from utils.sse import sse_stream_fanout
-from utils.event_pipeline import process_event
+from utils.acars_translator import translate_message
 from utils.constants import (
+    PROCESS_START_WAIT,
     PROCESS_TERMINATE_TIMEOUT,
     SSE_KEEPALIVE_INTERVAL,
     SSE_QUEUE_TIMEOUT,
-    PROCESS_START_WAIT,
 )
+from utils.event_pipeline import process_event
+from utils.flight_correlator import get_flight_correlator
+from utils.logging import sensor_logger as logger
 from utils.process import register_process, unregister_process
+from utils.sdr import SDRFactory, SDRType
+from utils.sse import sse_stream_fanout
+from utils.validation import validate_device_index, validate_gain, validate_ppm
 
 vdl2_bp = Blueprint('vdl2', __name__, url_prefix='/vdl2')
 
@@ -48,6 +49,7 @@ vdl2_last_message_time = None
 
 # Track which device is being used
 vdl2_active_device: int | None = None
+vdl2_active_sdr_type: str | None = None
 
 
 def find_dumpvdl2():
@@ -79,6 +81,21 @@ def stream_vdl2_output(process: subprocess.Popen, is_text_mode: bool = False) ->
                 data['type'] = 'vdl2'
                 data['timestamp'] = datetime.utcnow().isoformat() + 'Z'
 
+                # Enrich with translated ACARS label at top level (consistent with ACARS route)
+                try:
+                    vdl2_inner = data.get('vdl2', data)
+                    acars_payload = (vdl2_inner.get('avlc') or {}).get('acars')
+                    if acars_payload and acars_payload.get('label'):
+                        translation = translate_message({
+                            'label': acars_payload.get('label'),
+                            'text': acars_payload.get('msg_text', ''),
+                        })
+                        data['label_description'] = translation['label_description']
+                        data['message_type'] = translation['message_type']
+                        data['parsed'] = translation['parsed']
+                except Exception:
+                    pass
+
                 # Update stats
                 vdl2_message_count += 1
                 vdl2_last_message_time = time.time()
@@ -87,7 +104,6 @@ def stream_vdl2_output(process: subprocess.Popen, is_text_mode: bool = False) ->
 
                 # Feed flight correlator
                 try:
-                    from utils.flight_correlator import get_flight_correlator
                     get_flight_correlator().add_vdl2_message(data)
                 except Exception:
                     pass
@@ -110,7 +126,7 @@ def stream_vdl2_output(process: subprocess.Popen, is_text_mode: bool = False) ->
         logger.error(f"VDL2 stream error: {e}")
         app_module.vdl2_queue.put({'type': 'error', 'message': str(e)})
     finally:
-        global vdl2_active_device
+        global vdl2_active_device, vdl2_active_sdr_type
         # Ensure process is terminated
         try:
             process.terminate()
@@ -126,8 +142,9 @@ def stream_vdl2_output(process: subprocess.Popen, is_text_mode: bool = False) ->
             app_module.vdl2_process = None
         # Release SDR device
         if vdl2_active_device is not None:
-            app_module.release_sdr_device(vdl2_active_device)
+            app_module.release_sdr_device(vdl2_active_device, vdl2_active_sdr_type or 'rtlsdr')
             vdl2_active_device = None
+            vdl2_active_sdr_type = None
 
 
 @vdl2_bp.route('/tools')
@@ -159,7 +176,7 @@ def vdl2_status() -> Response:
 @vdl2_bp.route('/start', methods=['POST'])
 def start_vdl2() -> Response:
     """Start VDL2 decoder."""
-    global vdl2_message_count, vdl2_last_message_time, vdl2_active_device
+    global vdl2_message_count, vdl2_last_message_time, vdl2_active_device, vdl2_active_sdr_type
 
     with app_module.vdl2_lock:
         if app_module.vdl2_process and app_module.vdl2_process.poll() is None:
@@ -186,9 +203,16 @@ def start_vdl2() -> Response:
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
 
+    # Resolve SDR type for device selection
+    sdr_type_str = data.get('sdr_type', 'rtlsdr')
+    try:
+        sdr_type = SDRType(sdr_type_str)
+    except ValueError:
+        sdr_type = SDRType.RTL_SDR
+
     # Check if device is available
     device_int = int(device)
-    error = app_module.claim_sdr_device(device_int, 'vdl2')
+    error = app_module.claim_sdr_device(device_int, 'vdl2', sdr_type_str)
     if error:
         return jsonify({
             'status': 'error',
@@ -197,6 +221,7 @@ def start_vdl2() -> Response:
         }), 409
 
     vdl2_active_device = device_int
+    vdl2_active_sdr_type = sdr_type_str
 
     # Get frequencies - use provided or defaults
     # dumpvdl2 expects frequencies in Hz (integers)
@@ -214,13 +239,6 @@ def start_vdl2() -> Response:
     # Reset stats
     vdl2_message_count = 0
     vdl2_last_message_time = None
-
-    # Resolve SDR type for device selection
-    sdr_type_str = data.get('sdr_type', 'rtlsdr')
-    try:
-        sdr_type = SDRType(sdr_type_str)
-    except ValueError:
-        sdr_type = SDRType.RTL_SDR
 
     is_soapy = sdr_type not in (SDRType.RTL_SDR,)
 
@@ -256,6 +274,7 @@ def start_vdl2() -> Response:
 
         # On macOS, use pty to avoid stdout buffering issues
         if platform.system() == 'Darwin':
+            import pty
             master_fd, slave_fd = pty.openpty()
             process = subprocess.Popen(
                 cmd,
@@ -281,14 +300,17 @@ def start_vdl2() -> Response:
         if process.poll() is not None:
             # Process died - release device
             if vdl2_active_device is not None:
-                app_module.release_sdr_device(vdl2_active_device)
+                app_module.release_sdr_device(vdl2_active_device, vdl2_active_sdr_type or 'rtlsdr')
                 vdl2_active_device = None
+                vdl2_active_sdr_type = None
             stderr = ''
             if process.stderr:
                 stderr = process.stderr.read().decode('utf-8', errors='replace')
+            if stderr:
+                logger.error(f"dumpvdl2 stderr:\n{stderr}")
             error_msg = 'dumpvdl2 failed to start'
             if stderr:
-                error_msg += f': {stderr[:200]}'
+                error_msg += f': {stderr[:500]}'
             logger.error(error_msg)
             return jsonify({'status': 'error', 'message': error_msg}), 500
 
@@ -313,8 +335,9 @@ def start_vdl2() -> Response:
     except Exception as e:
         # Release device on failure
         if vdl2_active_device is not None:
-            app_module.release_sdr_device(vdl2_active_device)
+            app_module.release_sdr_device(vdl2_active_device, vdl2_active_sdr_type or 'rtlsdr')
             vdl2_active_device = None
+            vdl2_active_sdr_type = None
         logger.error(f"Failed to start VDL2 decoder: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -322,7 +345,7 @@ def start_vdl2() -> Response:
 @vdl2_bp.route('/stop', methods=['POST'])
 def stop_vdl2() -> Response:
     """Stop VDL2 decoder."""
-    global vdl2_active_device
+    global vdl2_active_device, vdl2_active_sdr_type
 
     with app_module.vdl2_lock:
         if not app_module.vdl2_process:
@@ -343,8 +366,9 @@ def stop_vdl2() -> Response:
 
     # Release device from registry
     if vdl2_active_device is not None:
-        app_module.release_sdr_device(vdl2_active_device)
+        app_module.release_sdr_device(vdl2_active_device, vdl2_active_sdr_type or 'rtlsdr')
         vdl2_active_device = None
+        vdl2_active_sdr_type = None
 
     return jsonify({'status': 'stopped'})
 
@@ -368,6 +392,26 @@ def stream_vdl2() -> Response:
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['X-Accel-Buffering'] = 'no'
     return response
+
+
+
+@vdl2_bp.route('/messages')
+def get_vdl2_messages() -> Response:
+    """Get recent VDL2 messages from correlator (for history reload)."""
+    limit = request.args.get('limit', 50, type=int)
+    limit = max(1, min(limit, 200))
+    msgs = get_flight_correlator().get_recent_messages('vdl2', limit)
+    return jsonify(msgs)
+
+
+@vdl2_bp.route('/clear', methods=['POST'])
+def clear_vdl2_messages() -> Response:
+    """Clear stored VDL2 messages and reset counter."""
+    global vdl2_message_count, vdl2_last_message_time
+    get_flight_correlator().clear_vdl2()
+    vdl2_message_count = 0
+    vdl2_last_message_time = None
+    return jsonify({'status': 'cleared'})
 
 
 @vdl2_bp.route('/frequencies')

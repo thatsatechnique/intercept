@@ -55,7 +55,9 @@ scanner_lock = threading.Lock()
 scanner_paused = False
 scanner_current_freq = 0.0
 scanner_active_device: Optional[int] = None
+scanner_active_sdr_type: str = 'rtlsdr'
 receiver_active_device: Optional[int] = None
+receiver_active_sdr_type: str = 'rtlsdr'
 scanner_power_process: Optional[subprocess.Popen] = None
 scanner_config = {
     'start_freq': 88.0,
@@ -996,7 +998,7 @@ def check_tools() -> Response:
 @receiver_bp.route('/scanner/start', methods=['POST'])
 def start_scanner() -> Response:
     """Start the frequency scanner."""
-    global scanner_thread, scanner_running, scanner_config, scanner_active_device, receiver_active_device
+    global scanner_thread, scanner_running, scanner_config, scanner_active_device, scanner_active_sdr_type, receiver_active_device, receiver_active_sdr_type
 
     with scanner_lock:
         if scanner_running:
@@ -1063,10 +1065,11 @@ def start_scanner() -> Response:
             }), 503
         # Release listening device if active
         if receiver_active_device is not None:
-            app_module.release_sdr_device(receiver_active_device)
+            app_module.release_sdr_device(receiver_active_device, receiver_active_sdr_type)
             receiver_active_device = None
+            receiver_active_sdr_type = 'rtlsdr'
         # Claim device for scanner
-        error = app_module.claim_sdr_device(scanner_config['device'], 'scanner')
+        error = app_module.claim_sdr_device(scanner_config['device'], 'scanner', scanner_config['sdr_type'])
         if error:
             return jsonify({
                 'status': 'error',
@@ -1074,6 +1077,7 @@ def start_scanner() -> Response:
                 'message': error
             }), 409
         scanner_active_device = scanner_config['device']
+        scanner_active_sdr_type = scanner_config['sdr_type']
         scanner_running = True
         scanner_thread = threading.Thread(target=scanner_loop_power, daemon=True)
         scanner_thread.start()
@@ -1091,9 +1095,10 @@ def start_scanner() -> Response:
                     'message': f'rx_fm not found. Install SoapySDR utilities for {sdr_type}.'
                 }), 503
         if receiver_active_device is not None:
-            app_module.release_sdr_device(receiver_active_device)
+            app_module.release_sdr_device(receiver_active_device, receiver_active_sdr_type)
             receiver_active_device = None
-        error = app_module.claim_sdr_device(scanner_config['device'], 'scanner')
+            receiver_active_sdr_type = 'rtlsdr'
+        error = app_module.claim_sdr_device(scanner_config['device'], 'scanner', scanner_config['sdr_type'])
         if error:
             return jsonify({
                 'status': 'error',
@@ -1101,6 +1106,7 @@ def start_scanner() -> Response:
                 'message': error
             }), 409
         scanner_active_device = scanner_config['device']
+        scanner_active_sdr_type = scanner_config['sdr_type']
 
         scanner_running = True
         scanner_thread = threading.Thread(target=scanner_loop, daemon=True)
@@ -1115,7 +1121,7 @@ def start_scanner() -> Response:
 @receiver_bp.route('/scanner/stop', methods=['POST'])
 def stop_scanner() -> Response:
     """Stop the frequency scanner."""
-    global scanner_running, scanner_active_device, scanner_power_process
+    global scanner_running, scanner_active_device, scanner_active_sdr_type, scanner_power_process
 
     scanner_running = False
     _stop_audio_stream()
@@ -1130,8 +1136,9 @@ def stop_scanner() -> Response:
                 pass
         scanner_power_process = None
     if scanner_active_device is not None:
-        app_module.release_sdr_device(scanner_active_device)
+        app_module.release_sdr_device(scanner_active_device, scanner_active_sdr_type)
         scanner_active_device = None
+        scanner_active_sdr_type = 'rtlsdr'
 
     return jsonify({'status': 'stopped'})
 
@@ -1296,7 +1303,7 @@ def get_presets() -> Response:
 @receiver_bp.route('/audio/start', methods=['POST'])
 def start_audio() -> Response:
     """Start audio at specific frequency (manual mode)."""
-    global scanner_running, scanner_active_device, receiver_active_device, scanner_power_process, scanner_thread
+    global scanner_running, scanner_active_device, scanner_active_sdr_type, receiver_active_device, receiver_active_sdr_type, scanner_power_process, scanner_thread
     global audio_running, audio_frequency, audio_modulation, audio_source, audio_start_token
 
     data = request.json or {}
@@ -1304,9 +1311,9 @@ def start_audio() -> Response:
     try:
         frequency = float(data.get('frequency', 0))
         modulation = normalize_modulation(data.get('modulation', 'wfm'))
-        squelch = int(data.get('squelch', 0))
-        gain = int(data.get('gain', 40))
-        device = int(data.get('device', 0))
+        squelch = int(data.get('squelch') or 0)
+        gain = int(data.get('gain') or 40)
+        device = int(data.get('device') or 0)
         sdr_type = str(data.get('sdr_type', 'rtlsdr')).lower()
         request_token_raw = data.get('request_token')
         request_token = int(request_token_raw) if request_token_raw is not None else None
@@ -1356,8 +1363,9 @@ def start_audio() -> Response:
         if scanner_running:
             scanner_running = False
             if scanner_active_device is not None:
-                app_module.release_sdr_device(scanner_active_device)
+                app_module.release_sdr_device(scanner_active_device, scanner_active_sdr_type)
                 scanner_active_device = None
+                scanner_active_sdr_type = 'rtlsdr'
             scanner_thread_ref = scanner_thread
             scanner_proc_ref = scanner_power_process
             scanner_power_process = None
@@ -1419,8 +1427,9 @@ def start_audio() -> Response:
                     audio_source = 'waterfall'
                     # Shared monitor uses the waterfall's existing SDR claim.
                     if receiver_active_device is not None:
-                        app_module.release_sdr_device(receiver_active_device)
+                        app_module.release_sdr_device(receiver_active_device, receiver_active_sdr_type)
                         receiver_active_device = None
+                        receiver_active_sdr_type = 'rtlsdr'
                     return jsonify({
                         'status': 'started',
                         'frequency': frequency,
@@ -1443,13 +1452,14 @@ def start_audio() -> Response:
         # to give the USB device time to be fully released.
         if receiver_active_device is None or receiver_active_device != device:
             if receiver_active_device is not None:
-                app_module.release_sdr_device(receiver_active_device)
+                app_module.release_sdr_device(receiver_active_device, receiver_active_sdr_type)
                 receiver_active_device = None
+                receiver_active_sdr_type = 'rtlsdr'
 
             error = None
             max_claim_attempts = 6
             for attempt in range(max_claim_attempts):
-                error = app_module.claim_sdr_device(device, 'receiver')
+                error = app_module.claim_sdr_device(device, 'receiver', sdr_type)
                 if not error:
                     break
                 if attempt < max_claim_attempts - 1:
@@ -1466,6 +1476,7 @@ def start_audio() -> Response:
                     'message': error
                 }), 409
             receiver_active_device = device
+            receiver_active_sdr_type = sdr_type
 
         _start_audio_stream(
             frequency,
@@ -1489,8 +1500,9 @@ def start_audio() -> Response:
 
         # Avoid leaving a stale device claim after startup failure.
         if receiver_active_device is not None:
-            app_module.release_sdr_device(receiver_active_device)
+            app_module.release_sdr_device(receiver_active_device, receiver_active_sdr_type)
             receiver_active_device = None
+            receiver_active_sdr_type = 'rtlsdr'
 
         start_error = ''
         for log_path in ('/tmp/rtl_fm_stderr.log', '/tmp/ffmpeg_stderr.log'):
@@ -1515,11 +1527,12 @@ def start_audio() -> Response:
 @receiver_bp.route('/audio/stop', methods=['POST'])
 def stop_audio() -> Response:
     """Stop audio."""
-    global receiver_active_device
+    global receiver_active_device, receiver_active_sdr_type
     _stop_audio_stream()
     if receiver_active_device is not None:
-        app_module.release_sdr_device(receiver_active_device)
+        app_module.release_sdr_device(receiver_active_device, receiver_active_sdr_type)
         receiver_active_device = None
+        receiver_active_sdr_type = 'rtlsdr'
     return jsonify({'status': 'stopped'})
 
 
@@ -1825,6 +1838,7 @@ waterfall_running = False
 waterfall_lock = threading.Lock()
 waterfall_queue: queue.Queue = queue.Queue(maxsize=200)
 waterfall_active_device: Optional[int] = None
+waterfall_active_sdr_type: str = 'rtlsdr'
 waterfall_config = {
     'start_freq': 88.0,
     'end_freq': 108.0,
@@ -2033,7 +2047,7 @@ def _waterfall_loop():
 
 def _stop_waterfall_internal() -> None:
     """Stop the waterfall display and release resources."""
-    global waterfall_running, waterfall_process, waterfall_active_device
+    global waterfall_running, waterfall_process, waterfall_active_device, waterfall_active_sdr_type
 
     waterfall_running = False
     if waterfall_process and waterfall_process.poll() is None:
@@ -2048,14 +2062,15 @@ def _stop_waterfall_internal() -> None:
         waterfall_process = None
 
     if waterfall_active_device is not None:
-        app_module.release_sdr_device(waterfall_active_device)
+        app_module.release_sdr_device(waterfall_active_device, waterfall_active_sdr_type)
         waterfall_active_device = None
+        waterfall_active_sdr_type = 'rtlsdr'
 
 
 @receiver_bp.route('/waterfall/start', methods=['POST'])
 def start_waterfall() -> Response:
     """Start the waterfall/spectrogram display."""
-    global waterfall_thread, waterfall_running, waterfall_config, waterfall_active_device
+    global waterfall_thread, waterfall_running, waterfall_config, waterfall_active_device, waterfall_active_sdr_type
 
     with waterfall_lock:
         if waterfall_running:
@@ -2101,11 +2116,12 @@ def start_waterfall() -> Response:
         pass
 
     # Claim SDR device
-    error = app_module.claim_sdr_device(waterfall_config['device'], 'waterfall')
+    error = app_module.claim_sdr_device(waterfall_config['device'], 'waterfall', 'rtlsdr')
     if error:
         return jsonify({'status': 'error', 'error_type': 'DEVICE_BUSY', 'message': error}), 409
 
     waterfall_active_device = waterfall_config['device']
+    waterfall_active_sdr_type = 'rtlsdr'
     waterfall_running = True
     waterfall_thread = threading.Thread(target=_waterfall_loop, daemon=True)
     waterfall_thread.start()

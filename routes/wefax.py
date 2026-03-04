@@ -33,11 +33,12 @@ _wefax_queue: queue.Queue = queue.Queue(maxsize=100)
 
 # Track active SDR device
 wefax_active_device: int | None = None
+wefax_active_sdr_type: str | None = None
 
 
 def _progress_callback(data: dict) -> None:
     """Callback to queue progress updates for SSE stream."""
-    global wefax_active_device
+    global wefax_active_device, wefax_active_sdr_type
 
     try:
         _wefax_queue.put_nowait(data)
@@ -56,8 +57,9 @@ def _progress_callback(data: dict) -> None:
         and data.get('status') in ('complete', 'error', 'stopped')
         and wefax_active_device is not None
     ):
-        app_module.release_sdr_device(wefax_active_device)
+        app_module.release_sdr_device(wefax_active_device, wefax_active_sdr_type or 'rtlsdr')
         wefax_active_device = None
+        wefax_active_sdr_type = None
 
 
 @wefax_bp.route('/status')
@@ -169,9 +171,9 @@ def start_decoder():
         }), 400
 
     # Claim SDR device
-    global wefax_active_device
+    global wefax_active_device, wefax_active_sdr_type
     device_int = int(device_index)
-    error = app_module.claim_sdr_device(device_int, 'wefax')
+    error = app_module.claim_sdr_device(device_int, 'wefax', sdr_type_str)
     if error:
         return jsonify({
             'status': 'error',
@@ -194,6 +196,7 @@ def start_decoder():
 
     if success:
         wefax_active_device = device_int
+        wefax_active_sdr_type = sdr_type_str
         return jsonify({
             'status': 'started',
             'frequency_khz': frequency_khz,
@@ -209,7 +212,7 @@ def start_decoder():
             'device': device_int,
         })
     else:
-        app_module.release_sdr_device(device_int)
+        app_module.release_sdr_device(device_int, sdr_type_str)
         return jsonify({
             'status': 'error',
             'message': 'Failed to start decoder',
@@ -219,13 +222,14 @@ def start_decoder():
 @wefax_bp.route('/stop', methods=['POST'])
 def stop_decoder():
     """Stop WeFax decoder."""
-    global wefax_active_device
+    global wefax_active_device, wefax_active_sdr_type
     decoder = get_wefax_decoder()
     decoder.stop()
 
     if wefax_active_device is not None:
-        app_module.release_sdr_device(wefax_active_device)
+        app_module.release_sdr_device(wefax_active_device, wefax_active_sdr_type or 'rtlsdr')
         wefax_active_device = None
+        wefax_active_sdr_type = None
 
     return jsonify({'status': 'stopped'})
 

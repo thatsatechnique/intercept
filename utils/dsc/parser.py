@@ -248,7 +248,10 @@ def parse_dsc_message(raw_line: str) -> dict[str, Any] | None:
     msg['priority'] = get_category_priority(msg['category'])
 
     # Mark if this is a critical alert
-    msg['is_critical'] = msg['category'] in ('DISTRESS', 'ALL_SHIPS_URGENCY_SAFETY')
+    msg['is_critical'] = msg['category'] in (
+        'DISTRESS', 'DISTRESS_ACK', 'DISTRESS_RELAY',
+        'URGENCY', 'SAFETY', 'ALL_SHIPS_URGENCY_SAFETY',
+    )
 
     return msg
 

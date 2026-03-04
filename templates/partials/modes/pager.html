@@ -10,7 +10,7 @@
             <!-- Populated by JavaScript -->
         </div>
         <div style="margin-top: 8px; display: flex; gap: 5px;">
-            <input type="text" id="newPresetFreq" placeholder="New freq (MHz)" style="flex: 1; padding: 6px; background: #0f3460; border: 1px solid #1a1a2e; color: #fff; border-radius: 4px; font-size: 12px;">
+            <input type="text" id="newPresetFreq" placeholder="New freq (MHz)" style="flex: 1; padding: 6px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; font-size: 12px;">
             <button class="preset-btn" onclick="addPreset()" style="background: #2ecc71;">Add</button>
         </div>
         <div style="margin-top: 5px;">
@@ -62,7 +62,7 @@
         <h3>Message Filters</h3>
         <div class="checkbox-group" style="margin-bottom: 10px;">
             <label>
-                <input type="checkbox" id="filterToneOnly" checked onchange="savePagerFilters()">
+                <input type="checkbox" id="filterToneOnly" onchange="savePagerFilters()">
                 Hide "Tone Only" messages
             </label>
         </div>
@@ -72,6 +72,14 @@
         </div>
         <div class="info-text" style="font-size: 10px; color: #666; margin-top: 5px;">
             Messages matching these keywords will be hidden from display but still logged.
+        </div>
+        <div id="mutedAddressInfo" style="margin-top: 8px; display: none;">
+            <span style="font-size: 11px; color: var(--text-dim, #888);">
+                <span id="mutedAddressCount">0</span> muted source(s)
+            </span>
+            <button onclick="SignalCards.unmuteAll()" style="margin-left: 6px; font-size: 10px; padding: 2px 8px; cursor: pointer; background: transparent; border: 1px solid var(--border-color, #444); color: var(--text-secondary, #aaa); border-radius: 3px;">
+                Unmute All
+            </button>
         </div>
     </div>
 

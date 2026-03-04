@@ -59,7 +59,7 @@
             </div>
             <input type="hidden" id="ookEncoding" value="pwm">
             <p id="ookEncodingHint" class="info-text" style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">
-                Short pulse = 0, long pulse = 1. Most common for ISM OOK.
+                Short pulse = 1, long pulse = 0. Most common for ISM OOK.
             </p>
         </div>
     </div>
@@ -140,6 +140,14 @@
             Uses rtl_433 with a custom flex decoder. Requires rtl_433 installed.
             Works on any OOK/ASK signal in the SDR's frequency range.
         </p>
+        <div id="ookCommandDisplay" style="display: none; margin-top: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 1px;">Active Command</span>
+                <button class="btn btn-sm btn-ghost" onclick="OokMode.copyCommand()" title="Copy to clipboard"
+                        style="font-size: 9px; padding: 1px 6px;">Copy</button>
+            </div>
+            <pre id="ookCommandText" style="margin: 0; padding: 6px 8px; background: #0a0a0a; border: 1px solid #1a2e1a; border-radius: 4px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); white-space: pre-wrap; word-break: break-all; line-height: 1.5;"></pre>
+        </div>
     </div>
 
     <button class="run-btn" id="ookStartBtn" onclick="OokMode.start()">Start Decoder</button>

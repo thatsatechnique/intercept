@@ -515,6 +515,13 @@ const SpyStations = (function() {
         }
     }
 
+    /**
+     * Destroy — no-op placeholder for consistent lifecycle interface.
+     */
+    function destroy() {
+        // SpyStations has no background timers or streams to clean up.
+    }
+
     // Public API
     return {
         init,
@@ -524,7 +531,8 @@ const SpyStations = (function() {
         showDetails,
         closeDetails,
         showHelp,
-        closeHelp
+        closeHelp,
+        destroy
     };
 })();
 

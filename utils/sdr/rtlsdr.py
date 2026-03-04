@@ -8,6 +8,7 @@ with existing RTL-SDR installations. No SoapySDR dependency required.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from typing import Optional
 
@@ -21,6 +22,28 @@ def _rtl_fm_demod_mode(modulation: str) -> str:
     """Map app/UI modulation names to rtl_fm demod tokens."""
     mod = str(modulation or '').lower().strip()
     return 'wbfm' if mod == 'wfm' else mod
+
+
+def _rtl_tool_supports_bias_t(tool_path: str) -> bool:
+    """Check if an rtl_* tool (rtl_fm, rtl_sdr) supports the -T bias-tee flag.
+
+    The -T flag is only available in RTL-SDR Blog builds, not in stock
+    rtl-sdr packages shipped by most distros.
+    """
+    try:
+        result = subprocess.run(
+            [tool_path, '--help'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        help_text = result.stdout + result.stderr
+        # Match "-T" as a CLI flag (e.g. "[-T]" or "-T enable bias"),
+        # not as part of "DVB-T" or similar text.
+        return bool(re.search(r'(?<!\w)-T\b', help_text))
+    except Exception as e:
+        logger.warning(f"Could not detect bias-t support for {tool_path}: {e}")
+        return False
 
 
 def _get_dump1090_bias_t_flag(dump1090_path: str) -> Optional[str]:
@@ -86,12 +109,17 @@ class RTLSDRCommandBuilder(CommandBuilder):
         ppm: Optional[int] = None,
         modulation: str = "fm",
         squelch: Optional[int] = None,
-        bias_t: bool = False
+        bias_t: bool = False,
+        direct_sampling: Optional[int] = None,
     ) -> list[str]:
         """
         Build rtl_fm command for FM demodulation.
 
         Used for pager decoding. Supports local devices and rtl_tcp connections.
+
+        Args:
+            direct_sampling: Enable direct sampling mode (0=off, 1=I-branch,
+                2=Q-branch). Use 2 for HF reception below 24 MHz.
         """
         rtl_fm_path = get_tool_path('rtl_fm') or 'rtl_fm'
         demod_mode = _rtl_fm_demod_mode(modulation)
@@ -112,8 +140,19 @@ class RTLSDRCommandBuilder(CommandBuilder):
         if squelch is not None and squelch > 0:
             cmd.extend(['-l', str(squelch)])
 
+        if direct_sampling is not None:
+            # Older rtl_fm builds (common in Docker/distro packages) don't
+            # support -D; they use -E direct / -E direct2 instead.
+            if direct_sampling == 1:
+                cmd.extend(['-E', 'direct'])
+            elif direct_sampling == 2:
+                cmd.extend(['-E', 'direct2'])
+
         if bias_t:
-            cmd.extend(['-T'])
+            if _rtl_tool_supports_bias_t(rtl_fm_path):
+                cmd.append('-T')
+            else:
+                logger.warning("Bias-t requested but rtl_fm does not support -T (RTL-SDR Blog drivers required).")
 
         # Output to stdout for piping
         cmd.append('-')
@@ -270,7 +309,10 @@ class RTLSDRCommandBuilder(CommandBuilder):
             cmd.extend(['-p', str(ppm)])
 
         if bias_t:
-            cmd.append('-T')
+            if _rtl_tool_supports_bias_t(rtl_sdr_path):
+                cmd.append('-T')
+            else:
+                logger.warning("Bias-t requested but rtl_sdr does not support -T (RTL-SDR Blog drivers required).")
 
         # Output to stdout
         cmd.append('-')

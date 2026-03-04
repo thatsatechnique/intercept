@@ -2295,7 +2295,8 @@ const Meshtastic = (function() {
         // Store & Forward
         showStoreForwardModal,
         requestStoreForward,
-        closeStoreForwardModal
+        closeStoreForwardModal,
+        destroy
     };
 
     /**
@@ -2305,6 +2306,13 @@ const Meshtastic = (function() {
         if (meshMap) {
             setTimeout(() => meshMap.invalidateSize(), 100);
         }
+    }
+
+    /**
+     * Destroy — tear down SSE, timers, and event listeners for clean mode switching.
+     */
+    function destroy() {
+        stopStream();
     }
 })();
 

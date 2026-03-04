@@ -17,6 +17,7 @@ var OokMode = (function () {
         frameCount: 0,
         bitOrder: 'msb',     // 'msb' | 'lsb'
         filterQuery: '',     // active hex/ascii filter
+        command: '',         // the rtl_433 command being run
     };
 
     // ---- Initialization ----
@@ -95,6 +96,7 @@ var OokMode = (function () {
                 updateUI(true);
                 connectSSE();
                 clearOutput();
+                showCommand(data.command || '');
             } else {
                 alert('Error: ' + (data.message || 'Unknown error'));
             }
@@ -248,7 +250,9 @@ var OokMode = (function () {
         }
 
         panel.appendChild(div);
-        panel.scrollTop = panel.scrollHeight;
+        if (typeof autoScroll === 'undefined' || autoScroll) {
+            panel.scrollTop = panel.scrollHeight;
+        }
     }
 
     // ---- Bit order toggle ----
@@ -284,6 +288,12 @@ var OokMode = (function () {
         if (countEl) countEl.textContent = '0 frames';
         var barEl = document.getElementById('ookStatusBarFrames');
         if (barEl) barEl.textContent = '0 frames';
+
+        // Hide output panel if not currently running (no frames to show)
+        if (!state.running) {
+            var outputPanel = document.getElementById('ookOutputPanel');
+            if (outputPanel) outputPanel.style.display = 'none';
+        }
     }
 
     function exportLog() {
@@ -308,6 +318,47 @@ var OokMode = (function () {
         URL.revokeObjectURL(url);
     }
 
+    function exportJSON() {
+        if (state.frames.length === 0) { alert('No frames to export'); return; }
+        var out = state.frames.map(function (msg) {
+            var interp = interpretBits(msg.bits, state.bitOrder);
+            return {
+                timestamp: msg.timestamp,
+                bit_count: msg.bit_count,
+                rssi: msg.rssi || null,
+                hex: interp.hex,
+                ascii: interp.ascii,
+                inverted: msg.inverted,
+                bits: msg.bits,
+            };
+        });
+        var blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'ook_frames.json';
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // ---- Command display ----
+
+    function showCommand(cmd) {
+        state.command = cmd;
+        var display = document.getElementById('ookCommandDisplay');
+        var text = document.getElementById('ookCommandText');
+        if (display && text && cmd) {
+            text.textContent = cmd;
+            display.style.display = 'block';
+        }
+    }
+
+    function copyCommand() {
+        if (state.command && navigator.clipboard) {
+            navigator.clipboard.writeText(state.command);
+        }
+    }
+
     // ---- Modulation selector ----
 
     function setEncoding(enc) {
@@ -328,7 +379,7 @@ var OokMode = (function () {
 
         // Update timing hint
         var hints = {
-            pwm: 'Short pulse = 0, long pulse = 1. Most common for ISM OOK.',
+            pwm: 'Short pulse = 1, long pulse = 0. Most common for ISM OOK.',
             ppm: 'Short gap = 0, long gap = 1. Pulse position encoding.',
             manchester: 'Rising edge = 1, falling edge = 0. Self-clocking.',
         };
@@ -428,8 +479,12 @@ var OokMode = (function () {
         if (indicator) indicator.style.background = running ? '#00ff88' : 'var(--text-dim)';
         if (statusText) statusText.textContent = running ? 'Listening' : 'Standby';
 
+        // Keep output panel visible if there are frames to review (even after stopping)
         var outputPanel = document.getElementById('ookOutputPanel');
-        if (outputPanel) outputPanel.style.display = running ? 'block' : 'none';
+        if (outputPanel) {
+            var showPanel = running || state.frames.length > 0;
+            outputPanel.style.display = showPanel ? 'flex' : 'none';
+        }
     }
 
     // ---- Public API ----
@@ -447,5 +502,7 @@ var OokMode = (function () {
         filterFrames: filterFrames,
         clearOutput: clearOutput,
         exportLog: exportLog,
+        exportJSON: exportJSON,
+        copyCommand: copyCommand,
     };
 })();

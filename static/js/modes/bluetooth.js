@@ -1773,8 +1773,25 @@ const BluetoothMode = (function() {
         // Getters
         getDevices: () => Array.from(devices.values()),
         isScanning: () => isScanning,
-        isShowAllAgents: () => showAllAgentsMode
+        isShowAllAgents: () => showAllAgentsMode,
+
+        // Lifecycle
+        destroy
     };
+
+    /**
+     * Destroy — close SSE stream and clear polling timers for clean mode switching.
+     */
+    function destroy() {
+        stopEventStream();
+        devices.clear();
+        pendingDeviceIds.clear();
+        if (deviceContainer) {
+            deviceContainer.innerHTML = '';
+        }
+        const countEl = document.getElementById('btDeviceListCount');
+        if (countEl) countEl.textContent = '0';
+    }
 })();
 
 // Global functions for onclick handlers

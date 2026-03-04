@@ -858,6 +858,13 @@ const SSTVGeneral = (function() {
         }
     }
 
+    /**
+     * Destroy — close SSE stream and stop scope animation for clean mode switching.
+     */
+    function destroy() {
+        stopStream();
+    }
+
     // Public API
     return {
         init,
@@ -869,6 +876,7 @@ const SSTVGeneral = (function() {
         deleteImage,
         deleteAllImages,
         downloadImage,
-        selectPreset
+        selectPreset,
+        destroy
     };
 })();

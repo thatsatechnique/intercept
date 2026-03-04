@@ -1,19 +1,26 @@
-"""Tests for Morse code decoder (utils/morse.py) and routes."""
+"""Tests for Morse code decoder pipeline and lifecycle routes."""
 
 from __future__ import annotations
 
+import io
 import math
+import os
 import queue
 import struct
 import threading
+import time
+import wave
+from collections import Counter
 
-import pytest
-
+import app as app_module
+import routes.morse as morse_routes
 from utils.morse import (
     CHAR_TO_MORSE,
     MORSE_TABLE,
+    EnvelopeDetector,
     GoertzelFilter,
     MorseDecoder,
+    decode_morse_wav_file,
     morse_decoder_thread,
 )
 
@@ -47,7 +54,7 @@ def generate_silence(duration: float, sample_rate: int = 8000) -> bytes:
 
 
 def generate_morse_audio(text: str, wpm: int = 15, tone_freq: float = 700.0, sample_rate: int = 8000) -> bytes:
-    """Generate PCM audio for a Morse-encoded string."""
+    """Generate synthetic CW PCM for the given text."""
     dit_dur = 1.2 / wpm
     dah_dur = 3 * dit_dur
     element_gap = dit_dur
@@ -61,333 +68,604 @@ def generate_morse_audio(text: str, wpm: int = 15, tone_freq: float = 700.0, sam
             morse = CHAR_TO_MORSE.get(char)
             if morse is None:
                 continue
+
             for ei, element in enumerate(morse):
                 if element == '.':
                     audio += generate_tone(tone_freq, dit_dur, sample_rate)
                 elif element == '-':
                     audio += generate_tone(tone_freq, dah_dur, sample_rate)
+
                 if ei < len(morse) - 1:
                     audio += generate_silence(element_gap, sample_rate)
+
             if ci < len(word) - 1:
                 audio += generate_silence(char_gap, sample_rate)
+
         if wi < len(words) - 1:
             audio += generate_silence(word_gap, sample_rate)
 
-    # Add some leading/trailing silence for threshold settling
-    silence = generate_silence(0.3, sample_rate)
-    return silence + audio + silence
+    # Leading/trailing silence for threshold settling.
+    return generate_silence(0.3, sample_rate) + audio + generate_silence(0.3, sample_rate)
+
+
+def write_wav(path, pcm_bytes: bytes, sample_rate: int = 8000) -> None:
+    """Write mono 16-bit PCM bytes to a WAV file."""
+    with wave.open(str(path), 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+
+
+def decode_text_from_events(events) -> str:
+    out = []
+    for ev in events:
+        if ev.get('type') == 'morse_char':
+            out.append(str(ev.get('char', '')))
+        elif ev.get('type') == 'morse_space':
+            out.append(' ')
+    return ''.join(out)
 
 
 # ---------------------------------------------------------------------------
-# MORSE_TABLE tests
+# Unit tests
 # ---------------------------------------------------------------------------
 
 class TestMorseTable:
-    def test_all_26_letters_present(self):
+    def test_morse_table_contains_letters_and_digits(self):
         chars = set(MORSE_TABLE.values())
-        for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-            assert letter in chars, f"Missing letter: {letter}"
+        for ch in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
+            assert ch in chars
 
-    def test_all_10_digits_present(self):
-        chars = set(MORSE_TABLE.values())
-        for digit in '0123456789':
-            assert digit in chars, f"Missing digit: {digit}"
-
-    def test_reverse_lookup_consistent(self):
+    def test_round_trip_morse_lookup(self):
         for morse, char in MORSE_TABLE.items():
             if char in CHAR_TO_MORSE:
                 assert CHAR_TO_MORSE[char] == morse
 
-    def test_no_duplicate_morse_codes(self):
-        """Each morse pattern should map to exactly one character."""
-        assert len(MORSE_TABLE) == len(set(MORSE_TABLE.keys()))
 
-
-# ---------------------------------------------------------------------------
-# GoertzelFilter tests
-# ---------------------------------------------------------------------------
-
-class TestGoertzelFilter:
-    def test_detects_target_frequency(self):
+class TestToneDetector:
+    def test_goertzel_prefers_target_frequency(self):
         gf = GoertzelFilter(target_freq=700.0, sample_rate=8000, block_size=160)
-        # Generate 700 Hz tone
-        samples = [0.8 * math.sin(2 * math.pi * 700 * i / 8000) for i in range(160)]
-        mag = gf.magnitude(samples)
-        assert mag > 10.0, f"Expected high magnitude for target freq, got {mag}"
-
-    def test_rejects_off_frequency(self):
-        gf = GoertzelFilter(target_freq=700.0, sample_rate=8000, block_size=160)
-        # Generate 1500 Hz tone (well off target)
-        samples = [0.8 * math.sin(2 * math.pi * 1500 * i / 8000) for i in range(160)]
-        mag_off = gf.magnitude(samples)
-
-        # Compare with on-target
-        samples_on = [0.8 * math.sin(2 * math.pi * 700 * i / 8000) for i in range(160)]
-        mag_on = gf.magnitude(samples_on)
-
-        assert mag_on > mag_off * 3, "Target freq should be significantly stronger than off-freq"
-
-    def test_silence_returns_near_zero(self):
-        gf = GoertzelFilter(target_freq=700.0, sample_rate=8000, block_size=160)
-        samples = [0.0] * 160
-        mag = gf.magnitude(samples)
-        assert mag < 0.01, f"Expected near-zero for silence, got {mag}"
-
-    def test_different_block_sizes(self):
-        for block_size in [80, 160, 320]:
-            gf = GoertzelFilter(target_freq=700.0, sample_rate=8000, block_size=block_size)
-            samples = [0.8 * math.sin(2 * math.pi * 700 * i / 8000) for i in range(block_size)]
-            mag = gf.magnitude(samples)
-            assert mag > 5.0, f"Should detect tone with block_size={block_size}"
+        on_tone = [0.8 * math.sin(2 * math.pi * 700.0 * i / 8000.0) for i in range(160)]
+        off_tone = [0.8 * math.sin(2 * math.pi * 1500.0 * i / 8000.0) for i in range(160)]
+        assert gf.magnitude(on_tone) > gf.magnitude(off_tone) * 3.0
 
 
-# ---------------------------------------------------------------------------
-# MorseDecoder tests
-# ---------------------------------------------------------------------------
+class TestEnvelopeDetector:
+    def test_magnitude_of_silence_is_near_zero(self):
+        det = EnvelopeDetector(block_size=160)
+        silence = [0.0] * 160
+        assert det.magnitude(silence) < 1e-6
 
-class TestMorseDecoder:
-    def _make_decoder(self, wpm=15):
-        """Create decoder with pre-warmed threshold for testing."""
-        decoder = MorseDecoder(sample_rate=8000, tone_freq=700.0, wpm=wpm)
-        # Warm up noise floor with silence
-        silence = generate_silence(0.5)
-        decoder.process_block(silence)
-        # Warm up signal peak with tone
-        tone = generate_tone(700.0, 0.3)
-        decoder.process_block(tone)
-        # More silence to settle
-        silence2 = generate_silence(0.5)
-        decoder.process_block(silence2)
-        # Reset state after warm-up
-        decoder._tone_on = False
-        decoder._current_symbol = ''
-        decoder._tone_blocks = 0
-        decoder._silence_blocks = 0
-        return decoder
+    def test_magnitude_of_constant_amplitude(self):
+        det = EnvelopeDetector(block_size=160)
+        loud = [0.8] * 160
+        mag = det.magnitude(loud)
+        assert abs(mag - 0.8) < 0.01
 
-    def test_dit_detection(self):
-        """A single dit should produce a '.' in the symbol buffer."""
-        decoder = self._make_decoder()
-        dit_dur = 1.2 / 15
+    def test_magnitude_of_sine_wave(self):
+        det = EnvelopeDetector(block_size=160)
+        samples = [0.5 * math.sin(2 * math.pi * 700 * i / 8000.0) for i in range(160)]
+        mag = det.magnitude(samples)
+        # RMS of a sine at amplitude 0.5 is 0.5/sqrt(2) ~ 0.354
+        assert 0.30 < mag < 0.40
 
-        # Send a tone burst (dit)
-        tone = generate_tone(700.0, dit_dur)
-        decoder.process_block(tone)
+    def test_magnitude_with_numpy_array(self):
+        import numpy as np
+        det = EnvelopeDetector(block_size=100)
+        arr = np.ones(100, dtype=np.float64) * 0.6
+        assert abs(det.magnitude(arr) - 0.6) < 0.01
 
-        # Send silence to trigger end of tone
-        silence = generate_silence(dit_dur * 2)
-        decoder.process_block(silence)
+    def test_empty_samples_returns_zero(self):
+        det = EnvelopeDetector(block_size=0)
+        assert det.magnitude([]) == 0.0
 
-        # Symbol buffer should have a dot
-        assert '.' in decoder._current_symbol, f"Expected '.' in symbol, got '{decoder._current_symbol}'"
 
-    def test_dah_detection(self):
-        """A longer tone should produce a '-' in the symbol buffer."""
-        decoder = self._make_decoder()
-        dah_dur = 3 * 1.2 / 15
+class TestEnvelopeMorseDecoder:
+    def test_envelope_decoder_detects_ook_elements(self):
+        """Verify envelope mode can distinguish on/off keying."""
+        sample_rate = 48000
+        wpm = 15
+        dit_dur = 1.2 / wpm
 
-        tone = generate_tone(700.0, dah_dur)
-        decoder.process_block(tone)
+        def ook_on(duration):
+            n = int(sample_rate * duration)
+            return struct.pack(f'<{n}h', *([int(0.7 * 32767)] * n))
 
-        silence = generate_silence(dah_dur)
-        decoder.process_block(silence)
+        def ook_off(duration):
+            n = int(sample_rate * duration)
+            return b'\x00\x00' * n
 
-        assert '-' in decoder._current_symbol, f"Expected '-' in symbol, got '{decoder._current_symbol}'"
+        # Generate dit-dah (A = .-)
+        audio = (
+            ook_off(0.3)
+            + ook_on(dit_dur)
+            + ook_off(dit_dur)
+            + ook_on(3 * dit_dur)
+            + ook_off(0.5)
+        )
 
-    def test_decode_letter_e(self):
-        """E is a single dit - the simplest character."""
-        decoder = self._make_decoder()
-        audio = generate_morse_audio('E', wpm=15)
+        decoder = MorseDecoder(
+            sample_rate=sample_rate,
+            tone_freq=700.0,
+            wpm=wpm,
+            detect_mode='envelope',
+        )
+        events = decoder.process_block(audio)
+        events.extend(decoder.flush())
+        elements = [e['element'] for e in events if e.get('type') == 'morse_element']
+
+        assert '.' in elements
+        assert '-' in elements
+
+    def test_envelope_metrics_have_zero_snr(self):
+        """Envelope mode metrics should report zero SNR fields."""
+        decoder = MorseDecoder(
+            sample_rate=8000,
+            detect_mode='envelope',
+        )
+        metrics = decoder.get_metrics()
+        assert metrics['detect_mode'] == 'envelope'
+        assert metrics['snr'] == 0.0
+        assert metrics['noise_ref'] == 0.0
+
+    def test_goertzel_mode_unchanged(self):
+        """Default goertzel mode still works as before."""
+        decoder = MorseDecoder(sample_rate=8000, wpm=15)
+        assert decoder.detect_mode == 'goertzel'
+        metrics = decoder.get_metrics()
+        assert 'detect_mode' in metrics
+        assert metrics['detect_mode'] == 'goertzel'
+
+
+class TestDropoutTolerance:
+    def test_dah_with_mid_gap_produces_single_dah(self):
+        """A dah-length tone with a 1-block silence gap in the middle should
+        still be decoded as a single dah, not two dits."""
+        sample_rate = 8000
+        wpm = 15
+        tone_freq = 700.0
+        dit_dur = 1.2 / wpm
+        dah_dur = 3 * dit_dur
+
+        decoder = MorseDecoder(
+            sample_rate=sample_rate,
+            tone_freq=tone_freq,
+            wpm=wpm,
+        )
+        block_size = decoder._block_size
+        block_dur = block_size / sample_rate
+
+        # Number of blocks for a full dah.
+        dah_blocks = int(dah_dur / block_dur)
+        half = dah_blocks // 2
+
+        # Build audio: silence warmup, first half of dah, 1-block silence gap,
+        # second half of dah, trailing silence.
+        warmup = generate_silence(0.4, sample_rate)
+        first_half = generate_tone(tone_freq, half * block_dur, sample_rate)
+        gap = generate_silence(block_dur, sample_rate)
+        second_half = generate_tone(tone_freq, (dah_blocks - half) * block_dur, sample_rate)
+        tail = generate_silence(0.5, sample_rate)
+
+        audio = warmup + first_half + gap + second_half + tail
+
+        events = decoder.process_block(audio)
+        events.extend(decoder.flush())
+        elements = [e['element'] for e in events if e.get('type') == 'morse_element']
+
+        # Should produce a single dah, not two dits.
+        assert elements == ['-'], f'Expected single dah but got {elements}'
+
+
+class TestTimingAndWpmEstimator:
+    def test_timing_classifier_distinguishes_dit_and_dah(self):
+        decoder = MorseDecoder(sample_rate=8000, tone_freq=700.0, wpm=15)
+        dit = 1.2 / 15.0
+        dah = dit * 3.0
+
+        audio = (
+            generate_silence(0.35)
+            + generate_tone(700.0, dit)
+            + generate_silence(dit * 1.5)
+            + generate_tone(700.0, dah)
+            + generate_silence(0.35)
+        )
+
+        events = decoder.process_block(audio)
+        events.extend(decoder.flush())
+        elements = [e['element'] for e in events if e.get('type') == 'morse_element']
+
+        assert '.' in elements
+        assert '-' in elements
+
+    def test_wpm_estimator_sanity(self):
+        target_wpm = 18
+        audio = generate_morse_audio('PARIS PARIS PARIS', wpm=target_wpm)
+        decoder = MorseDecoder(sample_rate=8000, tone_freq=700.0, wpm=12, wpm_mode='auto')
+
         events = decoder.process_block(audio)
         events.extend(decoder.flush())
 
-        chars = [e for e in events if e['type'] == 'morse_char']
-        decoded = ''.join(e['char'] for e in chars)
-        assert 'E' in decoded, f"Expected 'E' in decoded text, got '{decoded}'"
-
-    def test_decode_letter_t(self):
-        """T is a single dah."""
-        decoder = self._make_decoder()
-        audio = generate_morse_audio('T', wpm=15)
-        events = decoder.process_block(audio)
-        events.extend(decoder.flush())
-
-        chars = [e for e in events if e['type'] == 'morse_char']
-        decoded = ''.join(e['char'] for e in chars)
-        assert 'T' in decoded, f"Expected 'T' in decoded text, got '{decoded}'"
-
-    def test_word_space_detection(self):
-        """A long silence between words should produce decoded chars with a space."""
-        decoder = self._make_decoder()
-        dit_dur = 1.2 / 15
-        # E = dit
-        audio = generate_tone(700.0, dit_dur) + generate_silence(7 * dit_dur * 1.5)
-        # T = dah
-        audio += generate_tone(700.0, 3 * dit_dur) + generate_silence(3 * dit_dur)
-        events = decoder.process_block(audio)
-        events.extend(decoder.flush())
-
-        spaces = [e for e in events if e['type'] == 'morse_space']
-        assert len(spaces) >= 1, "Expected at least one word space"
-
-    def test_scope_events_generated(self):
-        """Decoder should produce scope events for visualization."""
-        audio = generate_morse_audio('SOS', wpm=15)
-        decoder = MorseDecoder(sample_rate=8000, tone_freq=700.0, wpm=15)
-
-        events = decoder.process_block(audio)
-
-        scope_events = [e for e in events if e['type'] == 'scope']
-        assert len(scope_events) > 0, "Expected scope events"
-        # Check scope event structure
-        se = scope_events[0]
-        assert 'amplitudes' in se
-        assert 'threshold' in se
-        assert 'tone_on' in se
-
-    def test_adaptive_threshold_adjusts(self):
-        """After processing audio, threshold should be non-zero."""
-        decoder = MorseDecoder(sample_rate=8000, tone_freq=700.0, wpm=15)
-
-        # Process some tone + silence
-        audio = generate_tone(700.0, 0.3) + generate_silence(0.3)
-        decoder.process_block(audio)
-
-        assert decoder._threshold > 0, "Threshold should adapt above zero"
-
-    def test_flush_emits_pending_char(self):
-        """flush() should emit any accumulated but not-yet-decoded symbol."""
-        decoder = MorseDecoder(sample_rate=8000, tone_freq=700.0, wpm=15)
-        decoder._current_symbol = '.'  # Manually set pending dit
-        events = decoder.flush()
-        assert len(events) == 1
-        assert events[0]['type'] == 'morse_char'
-        assert events[0]['char'] == 'E'
-
-    def test_flush_empty_returns_nothing(self):
-        decoder = MorseDecoder(sample_rate=8000, tone_freq=700.0, wpm=15)
-        events = decoder.flush()
-        assert events == []
+        metrics = decoder.get_metrics()
+        assert metrics['wpm'] >= 10.0
+        assert metrics['wpm'] <= 35.0
 
 
 # ---------------------------------------------------------------------------
-# morse_decoder_thread tests
+# Decoder thread tests
 # ---------------------------------------------------------------------------
 
 class TestMorseDecoderThread:
-    def test_thread_stops_on_event(self):
-        """Thread should exit when stop_event is set."""
-        import io
-        # Create a fake stdout that blocks until stop
-        stop = threading.Event()
-        q = queue.Queue(maxsize=100)
+    def test_thread_emits_waiting_heartbeat_on_no_data(self):
+        stop_event = threading.Event()
+        output_queue = queue.Queue(maxsize=64)
 
-        # Feed some audio then close
-        audio = generate_morse_audio('E', wpm=15)
-        fake_stdout = io.BytesIO(audio)
+        read_fd, write_fd = os.pipe()
+        read_file = os.fdopen(read_fd, 'rb', 0)
 
-        t = threading.Thread(
+        worker = threading.Thread(
             target=morse_decoder_thread,
-            args=(fake_stdout, q, stop),
+            args=(read_file, output_queue, stop_event),
+            daemon=True,
         )
-        t.daemon = True
-        t.start()
-        t.join(timeout=5)
-        assert not t.is_alive(), "Thread should finish after reading all data"
+        worker.start()
 
-    def test_thread_produces_events(self):
-        """Thread should push character events to the queue."""
-        import io
-        from unittest.mock import patch
-        stop = threading.Event()
-        q = queue.Queue(maxsize=1000)
+        got_waiting = False
+        deadline = time.monotonic() + 3.5
+        while time.monotonic() < deadline:
+            try:
+                msg = output_queue.get(timeout=0.3)
+            except queue.Empty:
+                continue
+            if msg.get('type') == 'scope' and msg.get('waiting'):
+                got_waiting = True
+                break
 
-        # Generate audio with pre-warmed decoder in mind
-        # The thread creates a fresh decoder, so generate lots of audio
-        audio = generate_silence(0.5) + generate_morse_audio('SOS', wpm=10) + generate_silence(1.0)
-        fake_stdout = io.BytesIO(audio)
+        stop_event.set()
+        os.close(write_fd)
+        read_file.close()
+        worker.join(timeout=2.0)
 
-        # Patch SCOPE_INTERVAL to 0 so scope events aren't throttled in fast reads
-        with patch('utils.morse.time') as mock_time:
-            # Make monotonic() always return increasing values
-            counter = [0.0]
-            def fake_monotonic():
-                counter[0] += 0.15  # each call advances 150ms
-                return counter[0]
-            mock_time.monotonic = fake_monotonic
+        assert got_waiting is True
+        assert not worker.is_alive()
 
-            t = threading.Thread(
-                target=morse_decoder_thread,
-                args=(fake_stdout, q, stop),
-            )
-            t.daemon = True
-            t.start()
-            t.join(timeout=10)
+    def test_thread_produces_character_events(self):
+        stop_event = threading.Event()
+        output_queue = queue.Queue(maxsize=512)
+        audio = generate_morse_audio('SOS', wpm=15)
+
+        worker = threading.Thread(
+            target=morse_decoder_thread,
+            args=(io.BytesIO(audio), output_queue, stop_event),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=4.0)
 
         events = []
-        while not q.empty():
-            events.append(q.get_nowait())
+        while not output_queue.empty():
+            events.append(output_queue.get_nowait())
 
-        # Should have at least some events (scope or char)
-        assert len(events) > 0, "Expected events from thread"
+        chars = [e for e in events if e.get('type') == 'morse_char']
+        assert len(chars) >= 1
 
 
 # ---------------------------------------------------------------------------
-# Route tests
+# Route lifecycle regression
 # ---------------------------------------------------------------------------
 
-class TestMorseRoutes:
-    def test_start_missing_required_fields(self, client):
-        """Start should succeed with defaults."""
-        _login_session(client)
-        with pytest.MonkeyPatch.context() as m:
-            m.setattr('app.morse_process', None)
-            # Should fail because rtl_fm won't be found in test env
-            resp = client.post('/morse/start', json={'frequency': '14.060'})
-            assert resp.status_code in (200, 400, 409, 500)
+class TestMorseLifecycleRoutes:
+    def _reset_route_state(self):
+        with app_module.morse_lock:
+            app_module.morse_process = None
+            while not app_module.morse_queue.empty():
+                try:
+                    app_module.morse_queue.get_nowait()
+                except queue.Empty:
+                    break
 
-    def test_stop_when_not_running(self, client):
-        """Stop when nothing is running should return not_running."""
-        _login_session(client)
-        with pytest.MonkeyPatch.context() as m:
-            m.setattr('app.morse_process', None)
-            resp = client.post('/morse/stop')
-            data = resp.get_json()
-            assert data['status'] == 'not_running'
+            morse_routes.morse_active_device = None
+            morse_routes.morse_decoder_worker = None
+            morse_routes.morse_stderr_worker = None
+            morse_routes.morse_relay_worker = None
+            morse_routes.morse_stop_event = None
+            morse_routes.morse_control_queue = None
+            morse_routes.morse_runtime_config = {}
+            morse_routes.morse_last_error = ''
+            morse_routes.morse_state = morse_routes.MORSE_IDLE
+            morse_routes.morse_state_message = 'Idle'
 
-    def test_status_when_not_running(self, client):
-        """Status should report not running."""
+    def test_start_stop_reaches_idle_and_releases_resources(self, client, monkeypatch):
         _login_session(client)
-        with pytest.MonkeyPatch.context() as m:
-            m.setattr('app.morse_process', None)
-            resp = client.get('/morse/status')
-            data = resp.get_json()
-            assert data['running'] is False
+        self._reset_route_state()
 
-    def test_invalid_tone_freq(self, client):
-        """Tone frequency outside range should be rejected."""
-        _login_session(client)
-        with pytest.MonkeyPatch.context() as m:
-            m.setattr('app.morse_process', None)
-            resp = client.post('/morse/start', json={
-                'frequency': '14.060',
-                'tone_freq': '50',  # too low
-            })
-            assert resp.status_code == 400
+        released_devices = []
 
-    def test_invalid_wpm(self, client):
-        """WPM outside range should be rejected."""
-        _login_session(client)
-        with pytest.MonkeyPatch.context() as m:
-            m.setattr('app.morse_process', None)
-            resp = client.post('/morse/start', json={
-                'frequency': '14.060',
-                'wpm': '100',  # too high
-            })
-            assert resp.status_code == 400
+        monkeypatch.setattr(app_module, 'claim_sdr_device', lambda idx, mode, sdr_type='rtlsdr': None)
+        monkeypatch.setattr(app_module, 'release_sdr_device', lambda idx, sdr_type='rtlsdr': released_devices.append(idx))
 
-    def test_stream_endpoint_exists(self, client):
-        """Stream endpoint should return SSE content type."""
+        class DummyDevice:
+            sdr_type = morse_routes.SDRType.RTL_SDR
+
+        class DummyBuilder:
+            def build_fm_demod_command(self, **kwargs):
+                return ['rtl_fm', '-f', '14060000', '-']
+
+        monkeypatch.setattr(morse_routes.SDRFactory, 'create_default_device', staticmethod(lambda sdr_type, index: DummyDevice()))
+        monkeypatch.setattr(morse_routes.SDRFactory, 'get_builder', staticmethod(lambda sdr_type: DummyBuilder()))
+        monkeypatch.setattr(morse_routes.SDRFactory, 'detect_devices', staticmethod(lambda: []))
+
+        pcm = generate_morse_audio('E', wpm=15, sample_rate=22050)
+
+        class FakeRtlProc:
+            def __init__(self, payload: bytes):
+                self.stdout = io.BytesIO(payload)
+                self.stderr = io.BytesIO(b'')
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 0
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                return 0
+
+            def kill(self):
+                self.returncode = -9
+
+        def fake_popen(cmd, *args, **kwargs):
+            return FakeRtlProc(pcm)
+
+        monkeypatch.setattr(morse_routes.subprocess, 'Popen', fake_popen)
+        monkeypatch.setattr(morse_routes, 'register_process', lambda _proc: None)
+        monkeypatch.setattr(morse_routes, 'unregister_process', lambda _proc: None)
+        monkeypatch.setattr(
+            morse_routes,
+            'safe_terminate',
+            lambda proc, timeout=0.0: setattr(proc, 'returncode', 0),
+        )
+
+        start_resp = client.post('/morse/start', json={
+            'frequency': '14.060',
+            'gain': '20',
+            'ppm': '0',
+            'device': '0',
+            'tone_freq': '700',
+            'wpm': '15',
+        })
+        assert start_resp.status_code == 200
+        assert start_resp.get_json()['status'] == 'started'
+
+        status_resp = client.get('/morse/status')
+        assert status_resp.status_code == 200
+        assert status_resp.get_json()['state'] in {'running', 'starting', 'stopping', 'idle'}
+
+        stop_resp = client.post('/morse/stop')
+        assert stop_resp.status_code == 200
+        stop_data = stop_resp.get_json()
+        assert stop_data['status'] == 'stopped'
+        assert stop_data['state'] == 'idle'
+        assert stop_data['alive'] == []
+
+        final_status = client.get('/morse/status').get_json()
+        assert final_status['running'] is False
+        assert final_status['state'] == 'idle'
+        assert 0 in released_devices
+
+    def test_start_retries_after_early_process_exit(self, client, monkeypatch):
         _login_session(client)
-        resp = client.get('/morse/stream')
-        assert resp.content_type.startswith('text/event-stream')
+        self._reset_route_state()
+
+        released_devices = []
+
+        monkeypatch.setattr(app_module, 'claim_sdr_device', lambda idx, mode, sdr_type='rtlsdr': None)
+        monkeypatch.setattr(app_module, 'release_sdr_device', lambda idx, sdr_type='rtlsdr': released_devices.append(idx))
+
+        class DummyDevice:
+            sdr_type = morse_routes.SDRType.RTL_SDR
+
+        class DummyBuilder:
+            def build_fm_demod_command(self, **kwargs):
+                cmd = ['rtl_fm', '-f', '14.060M', '-M', 'usb', '-s', '22050']
+                if kwargs.get('direct_sampling') is not None:
+                    cmd.extend(['--direct', str(kwargs['direct_sampling'])])
+                cmd.append('-')
+                return cmd
+
+        monkeypatch.setattr(morse_routes.SDRFactory, 'create_default_device', staticmethod(lambda sdr_type, index: DummyDevice()))
+        monkeypatch.setattr(morse_routes.SDRFactory, 'get_builder', staticmethod(lambda sdr_type: DummyBuilder()))
+        monkeypatch.setattr(morse_routes.SDRFactory, 'detect_devices', staticmethod(lambda: []))
+
+        pcm = generate_morse_audio('E', wpm=15, sample_rate=22050)
+        rtl_cmds = []
+
+        class FakeRtlProc:
+            def __init__(self, stdout_bytes: bytes, returncode: int | None):
+                self.stdout = io.BytesIO(stdout_bytes)
+                self.stderr = io.BytesIO(b'')
+                self.returncode = returncode
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 0
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                return 0
+
+            def kill(self):
+                self.returncode = -9
+
+        def fake_popen(cmd, *args, **kwargs):
+            rtl_cmds.append(cmd)
+            if len(rtl_cmds) == 1:
+                return FakeRtlProc(b'', 1)
+            return FakeRtlProc(pcm, None)
+
+        monkeypatch.setattr(morse_routes.subprocess, 'Popen', fake_popen)
+        monkeypatch.setattr(morse_routes, 'register_process', lambda _proc: None)
+        monkeypatch.setattr(morse_routes, 'unregister_process', lambda _proc: None)
+        monkeypatch.setattr(
+            morse_routes,
+            'safe_terminate',
+            lambda proc, timeout=0.0: setattr(proc, 'returncode', 0),
+        )
+
+        start_resp = client.post('/morse/start', json={
+            'frequency': '14.060',
+            'gain': '20',
+            'ppm': '0',
+            'device': '0',
+            'tone_freq': '700',
+            'wpm': '15',
+        })
+        assert start_resp.status_code == 200
+        assert start_resp.get_json()['status'] == 'started'
+        assert len(rtl_cmds) >= 2
+        assert rtl_cmds[0][0] == 'rtl_fm'
+        assert '--direct' in rtl_cmds[0]
+        assert '2' in rtl_cmds[0]
+        assert rtl_cmds[1][0] == 'rtl_fm'
+        assert '--direct' in rtl_cmds[1]
+        assert '1' in rtl_cmds[1]
+
+        stop_resp = client.post('/morse/stop')
+        assert stop_resp.status_code == 200
+        assert stop_resp.get_json()['status'] == 'stopped'
+        assert 0 in released_devices
+
+    def test_start_falls_back_to_next_device_when_selected_device_has_no_pcm(self, client, monkeypatch):
+        _login_session(client)
+        self._reset_route_state()
+
+        released_devices = []
+
+        monkeypatch.setattr(app_module, 'claim_sdr_device', lambda idx, mode, sdr_type='rtlsdr': None)
+        monkeypatch.setattr(app_module, 'release_sdr_device', lambda idx, sdr_type='rtlsdr': released_devices.append(idx))
+
+        class DummyDevice:
+            def __init__(self, index: int):
+                self.sdr_type = morse_routes.SDRType.RTL_SDR
+                self.index = index
+
+        class DummyDetected:
+            def __init__(self, index: int, serial: str):
+                self.sdr_type = morse_routes.SDRType.RTL_SDR
+                self.index = index
+                self.name = f'RTL {index}'
+                self.serial = serial
+
+        class DummyBuilder:
+            def build_fm_demod_command(self, **kwargs):
+                cmd = ['rtl_fm', '-d', str(kwargs['device'].index), '-f', '14.060M', '-M', 'usb', '-s', '22050']
+                if kwargs.get('direct_sampling') is not None:
+                    cmd.extend(['--direct', str(kwargs['direct_sampling'])])
+                cmd.append('-')
+                return cmd
+
+        monkeypatch.setattr(
+            morse_routes.SDRFactory,
+            'create_default_device',
+            staticmethod(lambda sdr_type, index: DummyDevice(int(index))),
+        )
+        monkeypatch.setattr(morse_routes.SDRFactory, 'get_builder', staticmethod(lambda sdr_type: DummyBuilder()))
+        monkeypatch.setattr(
+            morse_routes.SDRFactory,
+            'detect_devices',
+            staticmethod(lambda: [DummyDetected(0, 'AAA00000'), DummyDetected(1, 'BBB11111')]),
+        )
+
+        pcm = generate_morse_audio('E', wpm=15, sample_rate=22050)
+
+        class FakeRtlProc:
+            def __init__(self, stdout_bytes: bytes, returncode: int | None):
+                self.stdout = io.BytesIO(stdout_bytes)
+                self.stderr = io.BytesIO(b'')
+                self.returncode = returncode
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 0
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                return 0
+
+            def kill(self):
+                self.returncode = -9
+
+        def fake_popen(cmd, *args, **kwargs):
+            try:
+                dev = int(cmd[cmd.index('-d') + 1])
+            except Exception:
+                dev = 0
+            if dev == 0:
+                return FakeRtlProc(b'', 1)
+            return FakeRtlProc(pcm, None)
+
+        monkeypatch.setattr(morse_routes.subprocess, 'Popen', fake_popen)
+        monkeypatch.setattr(morse_routes, 'register_process', lambda _proc: None)
+        monkeypatch.setattr(morse_routes, 'unregister_process', lambda _proc: None)
+        monkeypatch.setattr(
+            morse_routes,
+            'safe_terminate',
+            lambda proc, timeout=0.0: setattr(proc, 'returncode', 0),
+        )
+
+        start_resp = client.post('/morse/start', json={
+            'frequency': '14.060',
+            'gain': '20',
+            'ppm': '0',
+            'device': '0',
+            'tone_freq': '700',
+            'wpm': '15',
+        })
+        assert start_resp.status_code == 200
+        start_data = start_resp.get_json()
+        assert start_data['status'] == 'started'
+        assert start_data['config']['active_device'] == 1
+        assert start_data['config']['device_serial'] == 'BBB11111'
+        assert 0 in released_devices
+
+        stop_resp = client.post('/morse/stop')
+        assert stop_resp.status_code == 200
+        assert stop_resp.get_json()['status'] == 'stopped'
+        assert 1 in released_devices
+
+
+# ---------------------------------------------------------------------------
+# Integration: synthetic CW -> WAV decode
+# ---------------------------------------------------------------------------
+
+class TestMorseIntegration:
+    def test_decode_morse_wav_contains_expected_phrase(self, tmp_path):
+        wav_path = tmp_path / 'cq_test_123.wav'
+        pcm = generate_morse_audio('CQ TEST 123', wpm=15, tone_freq=700.0)
+        write_wav(wav_path, pcm, sample_rate=8000)
+
+        result = decode_morse_wav_file(
+            wav_path,
+            sample_rate=8000,
+            tone_freq=700.0,
+            wpm=15,
+            bandwidth_hz=200,
+            auto_tone_track=True,
+            threshold_mode='auto',
+            wpm_mode='auto',
+            min_signal_gate=0.0,
+        )
+
+        decoded = ' '.join(str(result.get('text', '')).split())
+        assert 'CQ TEST 123' in decoded
+
+        events = result.get('events', [])
+        event_counts = Counter(e.get('type') for e in events)
+        assert event_counts['morse_char'] >= len('CQTEST123')

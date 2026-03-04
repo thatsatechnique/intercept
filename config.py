@@ -7,10 +7,26 @@ import os
 import sys
 
 # Application version
-VERSION = "2.22.3"
+VERSION = "2.23.0"
 
 # Changelog - latest release notes (shown on welcome screen)
 CHANGELOG = [
+    {
+        "version": "2.23.0",
+        "date": "February 2026",
+        "highlights": [
+            "Radiosonde weather balloon tracking mode with telemetry, map, and station distance",
+            "CW/Morse code decoder with Goertzel tone detection and OOK envelope mode",
+            "WeFax (Weather Fax) decoder with auto-scheduler and broadcast timeline",
+            "System Health monitoring mode with telemetry dashboard",
+            "HTTPS support, HackRF TSCM RF scan, ADS-B voice alerts",
+            "Production server (start.sh) with gunicorn + gevent for concurrent multi-client support",
+            "Multi-SDR support for WeFax, tool path overrides, native Homebrew detection",
+            "GPS mode upgraded to textured 3D globe",
+            "Destroy lifecycle added to all mode modules to prevent resource leaks",
+            "Dozens of bug fixes across ADS-B, APRS, SSE, Morse, waterfall, and more",
+        ]
+    },
     {
         "version": "2.22.3",
         "date": "February 2026",
@@ -354,6 +370,12 @@ SUBGHZ_DEFAULT_TX_GAIN = _get_env_int('SUBGHZ_TX_GAIN', 20)
 SUBGHZ_MAX_TX_DURATION = _get_env_int('SUBGHZ_MAX_TX_DURATION', 10)
 SUBGHZ_SWEEP_START_MHZ = _get_env_float('SUBGHZ_SWEEP_START', 300.0)
 SUBGHZ_SWEEP_END_MHZ = _get_env_float('SUBGHZ_SWEEP_END', 928.0)
+
+# Radiosonde settings
+RADIOSONDE_FREQ_MIN = _get_env_float('RADIOSONDE_FREQ_MIN', 400.0)
+RADIOSONDE_FREQ_MAX = _get_env_float('RADIOSONDE_FREQ_MAX', 406.0)
+RADIOSONDE_DEFAULT_GAIN = _get_env_float('RADIOSONDE_GAIN', 40.0)
+RADIOSONDE_UDP_PORT = _get_env_int('RADIOSONDE_UDP_PORT', 55673)
 
 # Update checking
 GITHUB_REPO = _get_env('GITHUB_REPO', 'smittix/intercept')

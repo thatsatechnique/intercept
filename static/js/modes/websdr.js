@@ -1005,6 +1005,15 @@ function escapeHtmlWebsdr(str) {
 
 // ============== EXPORTS ==============
 
+/**
+ * Destroy — disconnect audio and clear S-meter timer for clean mode switching.
+ */
+function destroyWebSDR() {
+    disconnectFromReceiver();
+}
+
+const WebSDR = { destroy: destroyWebSDR };
+
 window.initWebSDR = initWebSDR;
 window.searchReceivers = searchReceivers;
 window.selectReceiver = selectReceiver;
@@ -1015,3 +1024,4 @@ window.disconnectFromReceiver = disconnectFromReceiver;
 window.tuneKiwi = tuneKiwi;
 window.tuneFromBar = tuneFromBar;
 window.setKiwiVolume = setKiwiVolume;
+window.WebSDR = WebSDR;

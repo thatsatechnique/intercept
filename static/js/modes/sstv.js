@@ -39,13 +39,23 @@ const SSTV = (function() {
      * Initialize the SSTV mode
      */
     function init() {
-        checkStatus();
-        loadImages();
+        // Load location inputs first (sync localStorage read needed for lat/lon params)
         loadLocationInputs();
-        loadIssSchedule();
+
+        // Fire all API calls in parallel — schedule is the slowest, don't let it block
+        Promise.all([
+            checkStatus(),
+            loadImages(),
+            loadIssSchedule(),
+            updateIssPosition(),
+        ]).catch(err => console.error('SSTV init error:', err));
+
+        // DOM-only setup (no network, fast)
         initMap();
-        startIssTracking();
         startCountdown();
+        // ISS tracking interval (first call already in Promise.all above)
+        if (issUpdateInterval) clearInterval(issUpdateInterval);
+        issUpdateInterval = setInterval(updateIssPosition, 5000);
         // Ensure Leaflet recomputes dimensions after the SSTV pane becomes visible.
         setTimeout(() => invalidateMap(), 80);
         setTimeout(() => invalidateMap(), 260);
@@ -1373,8 +1383,21 @@ const SSTV = (function() {
         updateTLE,
         stopIssTracking,
         stopCountdown,
-        invalidateMap
+        invalidateMap,
+        destroy
     };
+
+    /**
+     * Destroy — close SSE stream and clear ISS tracking/countdown timers for clean mode switching.
+     */
+    function destroy() {
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        stopIssTracking();
+        stopCountdown();
+    }
 })();
 
 // Initialize when DOM is ready (will be called by selectMode)

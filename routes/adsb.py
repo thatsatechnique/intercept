@@ -13,8 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Generator
 
-from flask import Blueprint, jsonify, request, Response, render_template
-from flask import make_response
+from flask import Blueprint, Response, jsonify, make_response, render_template, request
 
 # psycopg2 is optional - only needed for PostgreSQL history persistence
 try:
@@ -28,39 +27,38 @@ except ImportError:
 
 import app as app_module
 from config import (
+    ADSB_AUTO_START,
     ADSB_DB_HOST,
     ADSB_DB_NAME,
     ADSB_DB_PASSWORD,
     ADSB_DB_PORT,
     ADSB_DB_USER,
-    ADSB_AUTO_START,
     ADSB_HISTORY_ENABLED,
     SHARED_OBSERVER_LOCATION_ENABLED,
 )
-from utils.logging import adsb_logger as logger
-from utils.process import write_dump1090_pid, clear_dump1090_pid, cleanup_stale_dump1090
-from utils.validation import (
-    validate_device_index, validate_gain,
-    validate_rtl_tcp_host, validate_rtl_tcp_port
-)
-from utils.sse import format_sse
-from utils.event_pipeline import process_event
-from utils.sdr import SDRFactory, SDRType
+from utils import aircraft_db
+from utils.acars_translator import translate_message
+from utils.adsb_history import _ensure_adsb_schema, adsb_history_writer, adsb_snapshot_writer
 from utils.constants import (
     ADSB_SBS_PORT,
     ADSB_TERMINATE_TIMEOUT,
-    PROCESS_TERMINATE_TIMEOUT,
-    SBS_SOCKET_TIMEOUT,
-    SBS_RECONNECT_DELAY,
-    SOCKET_BUFFER_SIZE,
-    SSE_KEEPALIVE_INTERVAL,
-    SSE_QUEUE_TIMEOUT,
-    SOCKET_CONNECT_TIMEOUT,
     ADSB_UPDATE_INTERVAL,
     DUMP1090_START_WAIT,
+    PROCESS_TERMINATE_TIMEOUT,
+    SBS_RECONNECT_DELAY,
+    SBS_SOCKET_TIMEOUT,
+    SOCKET_BUFFER_SIZE,
+    SOCKET_CONNECT_TIMEOUT,
+    SSE_KEEPALIVE_INTERVAL,
+    SSE_QUEUE_TIMEOUT,
 )
-from utils import aircraft_db
-from utils.adsb_history import adsb_history_writer, adsb_snapshot_writer, _ensure_adsb_schema
+from utils.event_pipeline import process_event
+from utils.flight_correlator import get_flight_correlator
+from utils.logging import adsb_logger as logger
+from utils.process import cleanup_stale_dump1090, clear_dump1090_pid, write_dump1090_pid
+from utils.sdr import SDRFactory, SDRType
+from utils.sse import format_sse
+from utils.validation import validate_device_index, validate_gain, validate_rtl_tcp_host, validate_rtl_tcp_port
 
 adsb_bp = Blueprint('adsb', __name__, url_prefix='/adsb')
 
@@ -72,6 +70,7 @@ adsb_last_message_time = None
 adsb_bytes_received = 0
 adsb_lines_received = 0
 adsb_active_device = None  # Track which device index is being used
+adsb_active_sdr_type: str | None = None
 _sbs_error_logged = False  # Suppress repeated connection error logs
 
 # Track ICAOs already looked up in aircraft database (avoid repeated lookups)
@@ -365,6 +364,7 @@ def parse_sbs_stream(service_addr):
     _sbs_error_logged = False
 
     while adsb_using_service:
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(SBS_SOCKET_TIMEOUT)
@@ -587,7 +587,6 @@ def parse_sbs_stream(service_addr):
                     continue
 
             flush_pending_updates(force=True)
-            sock.close()
             adsb_connected = False
         except OSError as e:
             adsb_connected = False
@@ -595,6 +594,12 @@ def parse_sbs_stream(service_addr):
                 logger.warning(f"SBS connection error: {e}, reconnecting...")
                 _sbs_error_logged = True
             time.sleep(SBS_RECONNECT_DELAY)
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
 
     adsb_connected = False
     logger.info("SBS stream parser stopped")
@@ -674,7 +679,7 @@ def adsb_session():
 @adsb_bp.route('/start', methods=['POST'])
 def start_adsb():
     """Start ADS-B tracking."""
-    global adsb_using_service, adsb_active_device
+    global adsb_using_service, adsb_active_device, adsb_active_sdr_type
 
     with app_module.adsb_lock:
         if adsb_using_service:
@@ -757,6 +762,7 @@ def start_adsb():
         sdr_type = SDRType(sdr_type_str)
     except ValueError:
         sdr_type = SDRType.RTL_SDR
+        sdr_type_str = sdr_type.value
 
     # For RTL-SDR, use dump1090. For other hardware, need readsb with SoapySDR
     if sdr_type == SDRType.RTL_SDR:
@@ -787,13 +793,17 @@ def start_adsb():
 
     # Check if device is available before starting local dump1090
     device_int = int(device)
-    error = app_module.claim_sdr_device(device_int, 'adsb')
+    error = app_module.claim_sdr_device(device_int, 'adsb', sdr_type_str)
     if error:
         return jsonify({
             'status': 'error',
             'error_type': 'DEVICE_BUSY',
             'message': error
         }), 409
+
+    # Track claimed device immediately so stop_adsb() can always release it
+    adsb_active_device = device
+    adsb_active_sdr_type = sdr_type_str
 
     # Create device object and build command via abstraction layer
     sdr_device = SDRFactory.create_default_device(sdr_type, index=device)
@@ -821,11 +831,24 @@ def start_adsb():
         )
         write_dump1090_pid(app_module.adsb_process.pid)
 
-        time.sleep(DUMP1090_START_WAIT)
+        # Poll for dump1090 readiness instead of blind sleep
+        dump1090_ready = False
+        poll_interval = 0.1
+        elapsed = 0.0
+        while elapsed < DUMP1090_START_WAIT:
+            if app_module.adsb_process.poll() is not None:
+                break  # Process exited early — handle below
+            if check_dump1090_service():
+                dump1090_ready = True
+                break
+            time.sleep(poll_interval)
+            elapsed += poll_interval
 
         if app_module.adsb_process.poll() is not None:
             # Process exited - release device and get error message
-            app_module.release_sdr_device(device_int)
+            app_module.release_sdr_device(device_int, sdr_type_str)
+            adsb_active_device = None
+            adsb_active_sdr_type = None
             stderr_output = ''
             if app_module.adsb_process.stderr:
                 try:
@@ -870,8 +893,37 @@ def start_adsb():
                 'message': full_msg
             })
 
+        # dump1090 is still running but SBS port never came up — device may be
+        # held by a stale process from a previous mode.  Kill it so the USB
+        # device is released and report a clear error to the frontend.
+        if not dump1090_ready:
+            logger.warning("dump1090 running but SBS port not available after %.1fs — killing", DUMP1090_START_WAIT)
+            try:
+                pgid = os.getpgid(app_module.adsb_process.pid)
+                os.killpg(pgid, 15)
+                app_module.adsb_process.wait(timeout=ADSB_TERMINATE_TIMEOUT)
+            except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
+                try:
+                    pgid = os.getpgid(app_module.adsb_process.pid)
+                    os.killpg(pgid, 9)
+                except (ProcessLookupError, OSError):
+                    pass
+            app_module.adsb_process = None
+            clear_dump1090_pid()
+            app_module.release_sdr_device(device_int, sdr_type_str)
+            adsb_active_device = None
+            adsb_active_sdr_type = None
+            return jsonify({
+                'status': 'error',
+                'error_type': 'DEVICE_BUSY',
+                'message': (
+                    'SDR device did not become ready in time. '
+                    'Another mode may still be releasing the device. '
+                    'Please wait a moment and try again.'
+                ),
+            })
+
         adsb_using_service = True
-        adsb_active_device = device  # Track which device is being used
         thread = threading.Thread(target=parse_sbs_stream, args=(f'localhost:{ADSB_SBS_PORT}',), daemon=True)
         thread.start()
 
@@ -891,14 +943,16 @@ def start_adsb():
         })
     except Exception as e:
         # Release device on failure
-        app_module.release_sdr_device(device_int)
+        app_module.release_sdr_device(device_int, sdr_type_str)
+        adsb_active_device = None
+        adsb_active_sdr_type = None
         return jsonify({'status': 'error', 'message': str(e)})
 
 
 @adsb_bp.route('/stop', methods=['POST'])
 def stop_adsb():
     """Stop ADS-B tracking."""
-    global adsb_using_service, adsb_active_device
+    global adsb_using_service, adsb_active_device, adsb_active_sdr_type
     data = request.get_json(silent=True) or {}
     stop_source = data.get('source')
     stopped_by = request.remote_addr
@@ -923,10 +977,11 @@ def stop_adsb():
 
         # Release device from registry
         if adsb_active_device is not None:
-            app_module.release_sdr_device(adsb_active_device)
+            app_module.release_sdr_device(adsb_active_device, adsb_active_sdr_type or 'rtlsdr')
 
         adsb_using_service = False
         adsb_active_device = None
+        adsb_active_sdr_type = None
 
     app_module.adsb_aircraft.clear()
     _looked_up_icaos.clear()
@@ -1224,7 +1279,21 @@ def get_aircraft_messages(icao: str):
 
     aircraft = app_module.adsb_aircraft.get(icao.upper())
     callsign = aircraft.get('callsign') if aircraft else None
+    registration = aircraft.get('registration') if aircraft else None
 
-    from utils.flight_correlator import get_flight_correlator
-    messages = get_flight_correlator().get_messages_for_aircraft(icao=icao.upper(), callsign=callsign)
+    messages = get_flight_correlator().get_messages_for_aircraft(
+        icao=icao.upper(), callsign=callsign, registration=registration
+    )
+
+    # Backfill translation on messages missing label_description
+    try:
+        for msg in messages.get('acars', []):
+            if not msg.get('label_description'):
+                translation = translate_message(msg)
+                msg['label_description'] = translation['label_description']
+                msg['message_type'] = translation['message_type']
+                msg['parsed'] = translation['parsed']
+    except Exception:
+        pass
+
     return jsonify({'status': 'success', 'icao': icao.upper(), **messages})

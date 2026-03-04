@@ -566,7 +566,7 @@ class TestWeFaxProgressCallback:
                     'message': 'decode failed',
                 })
 
-            mock_release.assert_called_once_with(3)
+            mock_release.assert_called_once_with(3, 'rtlsdr')
             assert wefax_routes.wefax_active_device is None
         finally:
             wefax_routes.wefax_active_device = original_device

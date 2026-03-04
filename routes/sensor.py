@@ -28,6 +28,7 @@ sensor_bp = Blueprint('sensor', __name__)
 
 # Track which device is being used
 sensor_active_device: int | None = None
+sensor_active_sdr_type: str | None = None
 
 # RSSI history per device (model_id -> list of (timestamp, rssi))
 sensor_rssi_history: dict[str, list[tuple[float, float]]] = {}
@@ -129,7 +130,7 @@ def stream_sensor_output(process: subprocess.Popen[bytes]) -> None:
     except Exception as e:
         app_module.sensor_queue.put({'type': 'error', 'text': str(e)})
     finally:
-        global sensor_active_device
+        global sensor_active_device, sensor_active_sdr_type
         # Ensure process is terminated
         try:
             process.terminate()
@@ -145,8 +146,9 @@ def stream_sensor_output(process: subprocess.Popen[bytes]) -> None:
             app_module.sensor_process = None
         # Release SDR device
         if sensor_active_device is not None:
-            app_module.release_sdr_device(sensor_active_device)
+            app_module.release_sdr_device(sensor_active_device, sensor_active_sdr_type or 'rtlsdr')
             sensor_active_device = None
+            sensor_active_sdr_type = None
 
 
 @sensor_bp.route('/sensor/status')
@@ -159,7 +161,7 @@ def sensor_status() -> Response:
 
 @sensor_bp.route('/start_sensor', methods=['POST'])
 def start_sensor() -> Response:
-    global sensor_active_device
+    global sensor_active_device, sensor_active_sdr_type
 
     with app_module.sensor_lock:
         if app_module.sensor_process:
@@ -180,10 +182,13 @@ def start_sensor() -> Response:
         rtl_tcp_host = data.get('rtl_tcp_host')
         rtl_tcp_port = data.get('rtl_tcp_port', 1234)
 
+        # Get SDR type early so we can pass it to claim/release
+        sdr_type_str = data.get('sdr_type', 'rtlsdr')
+
         # Claim local device if not using remote rtl_tcp
         if not rtl_tcp_host:
             device_int = int(device)
-            error = app_module.claim_sdr_device(device_int, 'sensor')
+            error = app_module.claim_sdr_device(device_int, 'sensor', sdr_type_str)
             if error:
                 return jsonify({
                     'status': 'error',
@@ -191,6 +196,7 @@ def start_sensor() -> Response:
                     'message': error
                 }), 409
             sensor_active_device = device_int
+            sensor_active_sdr_type = sdr_type_str
 
         # Clear queue
         while not app_module.sensor_queue.empty():
@@ -199,8 +205,7 @@ def start_sensor() -> Response:
             except queue.Empty:
                 break
 
-        # Get SDR type and build command via abstraction layer
-        sdr_type_str = data.get('sdr_type', 'rtlsdr')
+        # Build command via SDR abstraction layer
         try:
             sdr_type = SDRType(sdr_type_str)
         except ValueError:
@@ -277,20 +282,22 @@ def start_sensor() -> Response:
         except FileNotFoundError:
             # Release device on failure
             if sensor_active_device is not None:
-                app_module.release_sdr_device(sensor_active_device)
+                app_module.release_sdr_device(sensor_active_device, sensor_active_sdr_type or 'rtlsdr')
                 sensor_active_device = None
+                sensor_active_sdr_type = None
             return jsonify({'status': 'error', 'message': 'rtl_433 not found. Install with: brew install rtl_433'})
         except Exception as e:
             # Release device on failure
             if sensor_active_device is not None:
-                app_module.release_sdr_device(sensor_active_device)
+                app_module.release_sdr_device(sensor_active_device, sensor_active_sdr_type or 'rtlsdr')
                 sensor_active_device = None
+                sensor_active_sdr_type = None
             return jsonify({'status': 'error', 'message': str(e)})
 
 
 @sensor_bp.route('/stop_sensor', methods=['POST'])
 def stop_sensor() -> Response:
-    global sensor_active_device
+    global sensor_active_device, sensor_active_sdr_type
 
     with app_module.sensor_lock:
         if app_module.sensor_process:
@@ -303,8 +310,9 @@ def stop_sensor() -> Response:
 
             # Release device from registry
             if sensor_active_device is not None:
-                app_module.release_sdr_device(sensor_active_device)
+                app_module.release_sdr_device(sensor_active_device, sensor_active_sdr_type or 'rtlsdr')
                 sensor_active_device = None
+                sensor_active_sdr_type = None
 
             return jsonify({'status': 'stopped'})
 

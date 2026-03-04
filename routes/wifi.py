@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import platform
@@ -342,6 +341,7 @@ def stream_airodump_output(process, csv_path):
 
         while process.poll() is None:
             try:
+                import fcntl
                 fd = process.stderr.fileno()
                 fl = fcntl.fcntl(fd, fcntl.F_GETFL)
                 fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
