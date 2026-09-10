@@ -92,6 +92,8 @@ cd intercept
 sudo ./start.sh
 ```
 
+Stop it with `./stop.sh` (add `--all` to also kill orphaned SDR decoder processes; use `sudo` if you started with `sudo`).
+
 On first run, `setup.sh` launches a **guided wizard** that detects your OS, lets you choose install profiles, sets up the Python environment, and optionally configures environment variables and PostgreSQL.
 
 On subsequent runs, it opens an **interactive menu**:

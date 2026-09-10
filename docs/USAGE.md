@@ -175,6 +175,13 @@ INTERCEPT_SHARED_OBSERVER_LOCATION=false \
 sudo ./start.sh
 ```
 
+To stop:
+
+```bash
+sudo ./stop.sh          # stop the server
+sudo ./stop.sh --all    # also kill orphaned SDR helpers (rtl_fm, dump1090, ...)
+```
+
 **Docker example (.env)**
 
 ```bash

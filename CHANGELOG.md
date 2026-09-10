@@ -2,6 +2,15 @@
 
 All notable changes to iNTERCEPT will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **`stop.sh`** - Companion to `start.sh`; stops the server started from the repo directory, `--all` also kills orphaned SDR decoder processes
+
+### Fixed
+- `start.sh` no longer aborts on macOS where `hostname -I` is unsupported
+- `.dockerignore` now excludes nested `__pycache__` directories so root-owned `.pyc` files don't break the Docker build context
+
 ## [2.23.0] - 2026-02-27
 
 ### Added
