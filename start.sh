@@ -152,7 +152,8 @@ fi
 
 # ── Resolve LAN address for display ──────────────────────────────────────────
 if [[ "$HOST" == "0.0.0.0" ]]; then
-    LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    # hostname -I is Linux-only; fall back to macOS ipconfig, then localhost
+    LAN_IP=$( (hostname -I 2>/dev/null || ipconfig getifaddr en0 2>/dev/null || true) | awk '{print $1}')
     LAN_IP="${LAN_IP:-localhost}"
 else
     LAN_IP="$HOST"
